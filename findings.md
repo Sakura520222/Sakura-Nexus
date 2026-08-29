@@ -25,7 +25,9 @@
 
 ## 设计决策记录
 
-（设计文档撰写中，见 docs/superpowers/specs/）
+六项核心架构决策已于 2026-08-29 由用户逐项拍板，分类落盘于 [docs/decisions/](docs/decisions/README.md)（技术栈/运行模型/WebUI/前端/Go 基础库/RAG 架构）。旧 Python 版设计草稿与 P0 计划已废弃删除。
+
+技术栈变更要点：Python → **Go + gotd/td**；向量存储 → **Qdrant（派生索引）+ MySQL（真相源）**；前端延续 Vue 3 + Naive UI。
 
 ### TG-Forwarder 源项目 — 已完成 ✅（全文见 [docs/research/tg-forwarder-report.md](docs/research/tg-forwarder-report.md)）
 
