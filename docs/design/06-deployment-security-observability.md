@@ -1,6 +1,6 @@
 # 06 部署、安全与可观测性
 
-- 状态：📝 R3.1.1，待用户核对修改点
+- 状态：✅ 已冻结（R3.1.1，2026-08-29 总体设计批准）
 - 受约束 ADR：[002](../decisions/002-runtime-model.md) · [005](../decisions/005-go-libraries.md) · [006](../decisions/006-rag-architecture.md)
 
 ## 1. 部署形态

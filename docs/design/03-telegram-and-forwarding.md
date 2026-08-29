@@ -1,6 +1,6 @@
 # 03 Telegram 集成与转发
 
-- 状态：📝 R3.1.1，待用户核对修改点
+- 状态：✅ 已冻结（R3.1.1，2026-08-29 总体设计批准）
 - 受约束 ADR：[001](../decisions/001-telegram-stack.md) · [002](../decisions/002-runtime-model.md) · [008](../decisions/008-rich-message-transport.md)
 
 ## 1. gotd 客户端集成

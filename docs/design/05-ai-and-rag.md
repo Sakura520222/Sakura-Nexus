@@ -1,6 +1,6 @@
 # 05 AI 与 RAG
 
-- 状态：📝 R3.1.1，待用户核对修改点
+- 状态：✅ 已冻结（R3.1.1，2026-08-29 总体设计批准）
 - 受约束 ADR：[006](../decisions/006-rag-architecture.md) · [007](../decisions/007-scope-phases.md) · [008](../decisions/008-rich-message-transport.md)
 
 ## 1. AIProvider（platform/ai，openai-go + `option.WithBaseURL`）

@@ -1,6 +1,6 @@
 # 01 运行时与组件
 
-- 状态：✅ 已冻结（R3.1，2026-08-29）
+- 状态：✅ 已冻结（R3.1.1，2026-08-29 总体设计批准）
 - 受约束 ADR：[001](../decisions/001-telegram-stack.md) · [002](../decisions/002-runtime-model.md) · [003](../decisions/003-webui-form.md) · [005](../decisions/005-go-libraries.md) · [008](../decisions/008-rich-message-transport.md)
 
 ## 1. 进程与生命周期

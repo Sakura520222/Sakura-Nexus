@@ -1,6 +1,6 @@
 # Sakura-Bot v2 总体设计 — 总览（overview）
 
-- 状态：总览已成文；领域设计文件成文中
+- 状态：✅ 总体设计已批准并全部冻结（2026-08-29，用户批准）
 - 定位：**本文档系只做技术细化、不做新决策**；凡与 ADR 冲突，以 [ADR（docs/decisions/）](../decisions/README.md) 为准。
 - 目标架构基线：ADR 001–008（已冻结，001–006 为目标架构，007 为分期，008 为唯一专项例外）。
 
@@ -73,11 +73,11 @@ ADR-008 的「`AIProvider` 只产出通用 `AIResponse`、Rich Markdown 由 pres
 |---|---|---|---|
 | [01-runtime-and-components.md](01-runtime-and-components.md) | 3 进程生命周期 · 4 代码组织与接口边界（含 Sender 出站抽象）· 7 配置体系（.env v2、settings scope、加载与热更） | 001 002 003 005 008 | ✅ 已冻结（R3.1） |
 | [02-storage.md](02-storage.md) | 5 MySQL schema v2 · 6 Qdrant 设计 | 006 007 | ✅ 已冻结（R3.1） |
-| [03-telegram-and-forwarding.md](03-telegram-and-forwarding.md) | 8 Telegram 集成（含 8.x Bot 出站传输与 Rich Message Rendering）· 9 转发引擎 | 001 002 008 | 📝 R3.1.1 待核对 |
-| [04-webui-and-api.md](04-webui-and-api.md) | 10 WebUI 与 API（页面/路由/DTO/server-side 会话鉴权/WebSocket/RAG Query Harness） | 003 004 | 📝 R3.1.1 待核对 |
-| [05-ai-and-rag.md](05-ai-and-rag.md) | 11 AI Provider（含 AI 输出契约与 Answer 能力）· RAG 管线细化（索引状态机） | 006 007 008 | 📝 R3.1.1 待核对 |
-| [06-deployment-security-observability.md](06-deployment-security-observability.md) | 12 部署 · 13 可观测性与安全 | 002 005 006 | 📝 R3.1.1 待核对 |
-| [07-testing-milestones-reference.md](07-testing-milestones-reference.md) | 14 测试与 CI · 15 里程碑对照 · 16 附录（术语/功能对照参考） | 007 | 📝 R3.1.1 待核对 |
+| [03-telegram-and-forwarding.md](03-telegram-and-forwarding.md) | 8 Telegram 集成（含 8.x Bot 出站传输与 Rich Message Rendering）· 9 转发引擎 | 001 002 008 | ✅ 已冻结（R3.1.1） |
+| [04-webui-and-api.md](04-webui-and-api.md) | 10 WebUI 与 API（页面/路由/DTO/server-side 会话鉴权/WebSocket/RAG Query Harness） | 003 004 | ✅ 已冻结（R3.1.1） |
+| [05-ai-and-rag.md](05-ai-and-rag.md) | 11 AI Provider（含 AI 输出契约与 Answer 能力）· RAG 管线细化（索引状态机） | 006 007 008 | ✅ 已冻结（R3.1.1） |
+| [06-deployment-security-observability.md](06-deployment-security-observability.md) | 12 部署 · 13 可观测性与安全 | 002 005 006 | ✅ 已冻结（R3.1.1） |
+| [07-testing-milestones-reference.md](07-testing-milestones-reference.md) | 14 测试与 CI · 15 里程碑对照 · 16 附录（术语/功能对照参考） | 007 | ✅ 已冻结（R3.1.1） |
 
 原 16 章中的第 1 章（文档定位）与第 2 章（架构总图）由本 overview 承担。
 

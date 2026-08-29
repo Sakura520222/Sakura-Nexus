@@ -1,6 +1,6 @@
 # 04 WebUI 与 API
 
-- 状态：📝 R3.1.1，待用户核对修改点
+- 状态：✅ 已冻结（R3.1.1，2026-08-29 总体设计批准）
 - 受约束 ADR：[003](../decisions/003-webui-form.md) · [004](../decisions/004-frontend-stack.md)
 
 ## 1. 页面清单与路由

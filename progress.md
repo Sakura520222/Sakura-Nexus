@@ -81,3 +81,14 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 纯文字清理：01 ready channel 残留、03 相册「以首条判定」、06 JWT 残留、overview R3→R3.1 统一。
 - 顺手项（采纳）：04 前端删 pinia/axios（Vue composables + fetch 封装，需要时另行立项）；07 集成测试确定 GitHub Actions service containers + 本地 compose（不用 testcontainers-go）。
 - 状态：01/02 冻结（R3.1）；03–07 为 R3.1.1 待用户核对修改点；核对通过即宣布总体设计批准 → Go P0 实施计划。
+
+## 2026-08-29 · 会话 1（续）：总体设计批准冻结 + P0 实施计划编写
+
+- 用户正式批准总体设计：ADR-001~008 与 overview/01–07 全部冻结（R3.1.1）。仓库状态已统一标注。
+- 编写 Go P0 实施计划（docs/plans/p0-implementation.md）：
+  - 范围严格锁定 A+B+C；Qdrant/Summary/RAG 不进入（不建包不建表）。
+  - 风险前置：Phase 1（第 4 个任务 T1.1）即首次连接真实 Telegram（Bot 连通+session 落库），在任何引擎/WebUI 代码之前；GATE-1 为硬门禁，失败回设计层重估。
+  - 四个硬门禁：GATE-1 Telegram 连通性、GATE-2 转发端到端、GATE-3 浏览器全流程、GATE-4 P0 验收（07 §3 checklist + 24h）。
+  - 每任务定义交付物/验证（U/I/S 三类）/依赖；测试门禁（gofmt/golangci-lint+depguard/-race/集成）；commit 粒度 1–3 个。
+  - 实施中设计不可行 → 停止回报，修订设计获确认后继续，不静默偏离。
+- 当前状态：**实施计划待用户批准，零实现代码**。
