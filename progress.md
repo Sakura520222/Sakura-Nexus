@@ -150,3 +150,11 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 全面更名：module path（github.com/Sakura520222/Sakura-Nexus）+ 4 处 import + cmd/sakura-nexus/ + Makefile BINARY + .env.example + 设计文档/计划中的产物与服务名（sakura-nexus.service、/usr/local/bin/sakura-nexus、docker tag、compose 服务名等）；「Sakura-Bot / v1」保留为旧项目指代（decisions/README 已加定名注记）；研究文档不动。
 - git remote origin 已指向新仓库。更名 commit 待用户 push（用户此前自行发布过旧 module path 版本）。
 - T1.1 S 冒烟仍待 TELEGRAM_API_ID/TELEGRAM_API_HASH。
+
+## 2026-08-29 · 会话 1（续）：T1.1 完成（GATE-1 第一项通过）
+
+- **S 冒烟 PASS（首次真实 Telegram 连接）**：
+  - 第 1 次：迁移 → MTProto Bot 登录 → Self 校验 → `@sakura_bot_test_bot (id=8681128415, "Test")` → session 落库 4197 bytes。
+  - 第 2 次（重跑）：免登录复用 session、同身份验证通过。
+  - 环境：本地 MySQL 8.0.45 sakura_bot 库；用户填入 TELEGRAM_API_ID/HASH。
+- T1.1 完成度：U/I/S 全绿。剩余 GATE-1 内容在 T1.2/T1.3（User 连通、状态闭环）。
