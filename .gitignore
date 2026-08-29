@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Node / 前端
+node_modules/
+web/dist/
+web/node_modules/
+
+# 运行时数据（新项目所有数据都在 MySQL，本地不留数据文件）
+data/
+logs/
+*.session
+*.session-journal
+.env
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
