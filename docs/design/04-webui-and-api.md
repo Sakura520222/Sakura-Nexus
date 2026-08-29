@@ -1,6 +1,6 @@
 # 04 WebUI 与 API
 
-- 状态：📝 R3.1 修订版，待快速一致性复核
+- 状态：📝 R3.1.1，待用户核对修改点
 - 受约束 ADR：[003](../decisions/003-webui-form.md) · [004](../decisions/004-frontend-stack.md)
 
 ## 1. 页面清单与路由
@@ -89,10 +89,10 @@ client → server:
 ```text
 API DTO（types.ts）
   → frontend model（纯 TS 类型 + 转换函数，无 Naive UI 依赖）
-  → composable / store（pinia）
+  → composable（Vue 原生 reactivity / composables；P0 不引入 Pinia——ADR-004 未拍板，需要时另行立项）
   → Naive UI 组件
 ```
 
-- axios 拦截器：同源 Cookie 自动携带（`withCredentials` 同源默认）；401 → 跳 `/login`；错误 toast 统一格式。
+- 请求层：**浏览器原生 fetch 的轻封装**（同源 Cookie 自动携带；401 → 跳 `/login`；错误 toast 统一格式）——P0 不引入 axios（同上原则）。
 - 组件层不反向泄漏（NDataTable 的 row 类型不出现在 model 层）。
 - 构建：`pnpm build` → `dist/` → `go:embed`（运行时零 Node）；开发期 Vite proxy → 本地 Go 服务。

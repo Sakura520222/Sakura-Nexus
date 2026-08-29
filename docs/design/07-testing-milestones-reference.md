@@ -1,6 +1,6 @@
 # 07 测试、里程碑与参考
 
-- 状态：📝 R3.1 修订版，待快速一致性复核
+- 状态：📝 R3.1.1，待用户核对修改点
 - 受约束 ADR：[007](../decisions/007-scope-phases.md)
 - 更名说明（R3.1）：原「…-migration」更名以免误解——本项目**完全不迁移旧数据**（02 §5）；§4.2 是功能对照参考。
 
@@ -22,8 +22,8 @@
 
 ### 1.2 集成测试（R3.1：**必跑**，不依赖任何 Telegram 凭据）
 
-- **P0：MySQL 集成必跑**（testcontainers-go 或 CI service 容器）。
-- **P1 起：MySQL + Qdrant 集成必跑**。
+- 运行环境（R3.1.1 确定）：**GitHub Actions service containers + 本地 docker compose**——不引入 testcontainers-go（不静默新增 Go 依赖）。
+- **P0：MySQL 集成必跑**；**P1 起：MySQL + Qdrant 集成必跑**。
 - 覆盖：goose 迁移幂等；repositories CRUD 与事务语义；update state / peer storage / peer aliases 往返（gotd storage 接口实现）；P1：Qdrant upsert/search/alias 切换/reindex checkpoint（per-kind）续跑；索引状态机 + repair 的崩溃恢复模拟（kill -9 后重启收敛）。
 - 真实 Telegram：仍仅手动 smoke（`examples/smoke/`），不进 CI。
 

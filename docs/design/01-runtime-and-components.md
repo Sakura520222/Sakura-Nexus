@@ -42,7 +42,7 @@ App 按启动顺序持有 `[]service`；关闭按注册**逆序**调用 `Shutdow
 | 状态 | 语义 | 处置 |
 |---|---|---|
 | 正常运行 | — | — |
-| **DEPENDENCY_UNAVAILABLE** | 依赖（如 UserClient）不可用 | **service 自身保持存活**：在 Run 内等待依赖恢复信号（ready channel），不退出、不重启。例：UserClient 掉线时 Forwarding/Summary/RAG 只是暂停工作，不重启 |
+| **DEPENDENCY_UNAVAILABLE** | 依赖（如 UserClient）不可用 | **service 自身保持存活**：在 Run 内等待 `Availability` 恢复信号（§1.3 接口），不退出、不重启。例：UserClient 掉线时 Forwarding/Summary/RAG 只是暂停工作，不重启 |
 | **OWN_FATAL** | 自身不可恢复错误 | supervisor **指数退避重启该 service**（仅该服务） |
 | CORE fatal | CORE 服务（MySQL 连接、BotClient、WebServer）OWN_FATAL | 全局 cancel → 优雅退出（exit 1）→ systemd `Restart=on-failure` 兜底 |
 
@@ -155,9 +155,9 @@ type RuleRepo interface {
     Create / Update / Delete / SetEnabled(...)
 }
 type ForwardedRepo interface {
-    Exists(ctx, src domain.MessageRef, target int64) (bool, error)
-    Record(ctx, rec ForwardedRecord) error
-    CleanupBefore(ctx, retention time.Duration) (int64, error)
+    Exists(ctx context.Context, src domain.MessageRef, target domain.ChatRef) (bool, error) // R3.1.1：target 亦 ChatRef
+    Record(ctx context.Context, rec ForwardedRecord) error
+    CleanupBefore(ctx context.Context, retention time.Duration) (int64, error)
 }
 
 // summary（P1）：Sender（自有最小面）+ Fetcher.GetHistory + SummaryRepo + CursorRepo
@@ -252,7 +252,7 @@ SendRequest
 - channel 短清单（禁止网状自由 channel）：
   - 转发发送队列（容量 100，**阻塞背压**：转发不允许丢，满则等待/告警）
   - 日志环形缓冲→WS 推送（容量 512，**丢弃最旧**）
-  - **RAG derived-index 队列**（P1，容量 1000）：仅派生索引任务可丢。New/Edit 索引任务队满时可丢并计数（`embedding_state=pending` 留痕，repair/reindex 补做）；**Delete invalidation 不允许静默丢弃**（阻塞入队或高优先级处理，Qdrant point 最终必须删除——否则已删内容仍可被检索，违反 ADR-006）
+  - **RAG derived-index 队列**（P1，容量 1000）：**只是加速器——durability ≠ queue delivery**。New/Edit 索引任务队满时可丢并计数（`index_state=pending` 留痕，repair 补做）；Delete invalidation 入队失败只计数/告警，**不得阻塞 canonical MySQL commit**——Delete 的持久保证在事务内置的 `delete_pending` 状态，最终删除由 repair 状态机收敛（05 §4，违反 ADR-006 的「已删内容仍可检索」不可能发生）
   - 数据流边界：`Telegram event → MySQL canonical + revision（永不允许因队满丢失，先于队列写入）→ derived-index 队列 → AI augmentation / embedding / Qdrant`
   - 客户端依赖状态：`Availability` 接口（§1.3；不使用一次性 close channel）
   - 跨组件配置事件：不走全局 channel 总线，用 settings 中心订阅回调（订阅者明确、可枚举）。

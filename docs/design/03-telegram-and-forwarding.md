@@ -1,6 +1,6 @@
 # 03 Telegram 集成与转发
 
-- 状态：📝 R3.1 修订版，待快速一致性复核
+- 状态：📝 R3.1.1，待用户核对修改点
 - 受约束 ADR：[001](../decisions/001-telegram-stack.md) · [002](../decisions/002-runtime-model.md) · [008](../decisions/008-rich-message-transport.md)
 
 ## 1. gotd 客户端集成
@@ -24,7 +24,10 @@
 
 - **User 客户端**：`updates.Manager`（gotd 当前对外 API；持久化 StateStorage 见 §1.2）→ dispatcher → 领域 handler（收到 `domain.ChannelMessage`，已剥离 gotd 类型）：forwarding 订阅 NewMessage（P0）；rag 订阅 New/Edit/Delete（P1）；conversation 订阅讨论群消息（P2）。
 - 常规 gap：Manager 的 difference recovery 自动补齐（含离线期间），channel PTS 走 per-channel 表。
-- **异常边界（R3.1，不再宣称「无显式补拉」）**：`OnTooLong` / `OnLoadUserStateFailed` / `OnLoadChannelStateFailed`（含 `ChannelDifferenceTooLong`——无法无限自动恢复）→ 标记该 channel `recovery_required` → **User `GetHistory` 定向补抓** → 补抓消息走**同一条 canonical/dedup 管线**（重复自然被 UNIQUE 键与去重吸收）→ 恢复并写入新 state。
+- **异常边界（R3.1.1 按 gotd callback 签名区分 scope，不再宣称「无显式补拉」）**：
+  - `OnLoadChannelStateFailed(channelID)`（含 `ChannelDifferenceTooLong`）→ **channel 级**：标记该 channel `recovery_required` → User `GetHistory` 定向补抓 → 补抓消息走**同一条 canonical/dedup 管线**（重复被 UNIQUE 键与去重吸收）→ 恢复并写入新 state。
+  - `OnTooLong()` / `OnLoadUserStateFailed()`（无 channelID，**account/global 级**）→ 对当前全部受管源频道做定向 history reconciliation（同管线）。
+  - `OnChannelInaccessible(channelID)` → **不是补抓**：标记该源频道 `unavailable`（被踢出/不可访问）、停止其 recovery 循环、WebUI 显示 degraded/权限错误——防止被踢出频道后无意义反复补抓。
 - **Bot 客户端**：P0 仅连接保活与发送；私聊命令/回调在 P1/P2 接入 dispatcher。Bot **不参与任何频道抓取**（ADR-001 无降级）。
 - handler panic 由 dispatcher 边界 recover 记日志，不影响连接与其他 handler（01 §5.3）。
 
@@ -108,14 +111,14 @@
 ### 3.1 事件入口与规则匹配
 
 - User NewMessage → engine 入口 → 相册聚合分支（§1.6）或直接流程。
-- 规则匹配：`chat_id` 精确匹配优先；未命中再以归一化 username（去 `@`、小写）匹配；**命中多条规则 → 逐规则独立处理**（各自过滤/去重/发送，单规则失败不影响其他）。
+- 规则匹配（R3.1.1：全程 ChatRef）：`ChatRef{kind, id}` 精确匹配优先；未命中再以归一化 username（去 `@`、小写）匹配辅助列；**命中多条规则 → 逐规则独立处理**（各自过滤/去重/发送，单规则失败不影响其他）。
 
 ### 3.2 过滤链（顺序固定，任一拒绝即终止该规则并记原因）
 
 ```text
 频道校验（is_channel/broadcast）
-→ 相册聚合（以首条判定）
-→ 去重查（forwarded_messages 键 (src_chat, src_msg, target)）
+→ 相册聚合（整组判定：聚合文本 + 媒体类型并集，§1.6）
+→ 去重查（forwarded_messages 完整 ChatRef 键，§3.5）
 → forward_original_only（带 forward 头的消息拒绝）
 → keywords（子串、大小写不敏感、任一命中；空=过）
 → patterns（正则 re.search 任一命中；坏正则记日志按不匹配）
@@ -138,7 +141,7 @@
 
 ### 3.5 去重与统计
 
-- 去重键 `(source_chat_type, source_chat_id, source_message_id, target_chat_id)`（R3.1：kind 参与身份）；`content_dedup` 开启时附加内容哈希比对（防删帖重发）。
+- 去重键 `(source_chat_type, source_chat_id, source_message_id, target_chat_type, target_chat_id)`（R3.1.1：源与目标均为完整 ChatRef）；`content_dedup` 开启时附加内容哈希比对（防删帖重发）。
 - **发送成功才写 forwarded_messages**；stats 按**真实成败**计数（修复源项目假成功问题）。
 
 ### 3.6 底栏模板

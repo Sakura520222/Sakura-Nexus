@@ -110,8 +110,8 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 |---|---|
 | id INT UNSIGNED PK AI | |
 | name VARCHAR(128) NULL | |
-| source_chat_id BIGINT UNSIGNED NULL + source_username VARCHAR(64) NULL | 二者至少一个（匹配：id 优先，username 辅助） |
-| target_chat_id / target_username | 同上 |
+| source_chat_type `VARCHAR(8)` + source_chat_id BIGINT UNSIGNED NULL + source_username VARCHAR(64) NULL | ChatRef 完整持久化（R3.1.1）：kind+id 为身份，username 为辅助列；id 与 username 至少一个 |
+| target_chat_type / target_chat_id / target_username | 同上 |
 | enabled TINYINT(1) | |
 | keywords / blacklist / patterns / blacklist_patterns / media_types JSON | 过滤链（struct 校验：正则可编译） |
 | forward_original_only TINYINT(1) | 只转原创 |
@@ -126,7 +126,7 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 
 | 字段 | 说明 |
 |---|---|
-| PK(source_chat_id, source_message_id, target_chat_id) | 去重键 |
+| **PK(source_chat_type, source_chat_id, source_message_id, target_chat_type, target_chat_id)** | 去重键（R3.1.1：源与目标均携带 kind 的完整 ChatRef） |
 | rule_id / target_message_id BIGINT UNSIGNED NULL | 映射（未来编辑/删除同步钩子） |
 | content_hash CHAR(64) NULL | 可选内容哈希去重（settings.forwarding.content_dedup 开启时启用） |
 | created_at | 保留期清理（dedup_days） |
@@ -174,13 +174,13 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | caption / ocr_text TEXT | 结构化描述 |
 | objects / entities / tags JSON | Vision 输出 |
 | model VARCHAR(64) | 分析模型（reindex 可复用/失效判定） |
-| index_state `VARCHAR(16)` | pending / indexed / error（同消息状态机） |
+| index_state `VARCHAR(16)` | **完整五态**（R3.1.1）：pending / indexed / delete_pending / excluded / error——Message Edit 可能移除图片、Delete 必须删除对应 vision point，与消息同一状态机 |
 | updated_at | |
 
 **写入协议**（引擎内单一入口执行）：
 - New：messages INSERT（revision 0）+ revisions INSERT(rev 0, create)。
 - Edit：messages UPDATE（text/media/edited_at/current_revision+1）+ revisions INSERT(新 rev, edit)。
-- Delete：messages UPDATE `deleted_at = now()` **并 `current_revision += 1`**（否则 `summary_sources.revision` 与 `messages.current_revision` 的比对检测不到 Delete，stale 判定失效）+ **revisions INSERT(新 rev, delete)**（不可变删除事件）+ Qdrant 删除 active point（invalidation 任务不允许静默丢弃，见 01 §5.2）。删除内容退出普通知识检索；delete revision 本身可支撑时间线/审计需求（ADR-006）。
+- Delete（R3.1.1：durable 状态机模型，**事务内不做任何 Qdrant 调用**）：**同一 MySQL 事务**内执行 `deleted_at = now()` + `current_revision += 1`（否则 `summary_sources.revision` 与 `messages.current_revision` 的比对检测不到 Delete，stale 判定失效）+ `embedding_state = delete_pending` + revisions INSERT(新 rev, delete) → COMMIT。COMMIT 后尝试入队 invalidation（**仅加速器**：入队失败计数/告警、不回滚不阻塞）；Qdrant point 删除由 worker 或 repair（扫描 `delete_pending`）执行完成后置 `excluded`。删除内容退出普通知识检索；delete revision 支撑时间线/审计（ADR-006）。**durability ≠ queue delivery**。
 
 ### 2.4 会话（P1 建表，P2 使用——三方身份显式建模）
 
@@ -218,7 +218,7 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | ai_model VARCHAR(64) | |
 | source_revision_hash CHAR(64) | 生成时各源消息 revision 的聚合哈希（stale 判定） |
 | is_stale TINYINT(1) | 底层消息编辑/删除后置位 |
-| **index_state `VARCHAR(16)`**（R3.1） | `pending` / `indexed` / `error`——Summary 是一级知识文档（ADR-006），必须与消息同样有索引状态机，否则「commit 后、入队前崩溃」产生永久漏索引（repair 同时扫描 messages 与 summaries，05 §4） |
+| **index_state `VARCHAR(16)`**（R3.1） | `pending` / `indexed` / `error`——Summary 是一级知识文档（ADR-006），必须与消息同样有索引状态机，否则「commit 后、入队前崩溃」产生永久漏索引（repair 同时扫描 messages 与 summaries，05 §4）。**is_stale 置位与 index_state=pending 重置在同一事务**（payload 同步同样走 durable state，05 §6） |
 | **index_error VARCHAR(255) NULL**（R3.1） | 最近索引失败原因 |
 | report_message_id BIGINT UNSIGNED NULL | 报告消息（水位衔接 + 深链） |
 | created_at | |
@@ -284,9 +284,10 @@ alias: sakura_conversations → sakura_conversations_v{N}（同机制）
 
 ```text
 UUIDv5(namespace=SakuraBot, name):
-  message:{messages.id}          # 不含 revision —— Edit 后同 ID upsert，检索永远命中最新版
+  message:{messages.id}             # 不含 revision —— Edit 后同 ID upsert，检索永远命中最新版
   summary:{summaries.id}
-  vision:{media_ref_key}         # P2
+  vision:{messages.id}:{media_key}  # P2（R3.1.1）：镜像 MySQL PK(message_id, media_key)——
+                                    # 消息内局部 key（如 photo:0）全局不唯一，必须带 messages.id 防碰撞
 ```
 
 ### 3.3 vector 与 payload schema
@@ -298,8 +299,8 @@ UUIDv5(namespace=SakuraBot, name):
 
 | 字段 | 用途 |
 |---|---|
-| kind | channel_message / summary / discussion_message / bot_reply（与 messages.source_type 一致） |
-| mysql_ref | {messages.id} 或 {summaries.id}（回表主键） |
+| kind | `channel_message` / `summary` / `vision_description` / `discussion_message` / `bot_reply` / `extracted_memory`（R3.1.1 补全六种——每种均有 MySQL SoT） |
+| mysql_ref | **统一三元组**（R3.1.1）：`source_table`（messages / summaries / media_analyses / user_memories）+ `source_id` + `source_subkey?`（vision 的 media_key）——消除「有 id 不知查哪张表」的歧义 |
 | channel_id / message_id | 展示与回链 |
 | source_type | 同 messages |
 | published_at | datetime range filter |

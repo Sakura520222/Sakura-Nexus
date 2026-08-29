@@ -1,6 +1,6 @@
 # 06 部署、安全与可观测性
 
-- 状态：📝 R3.1 修订版，待快速一致性复核
+- 状态：📝 R3.1.1，待用户核对修改点
 - 受约束 ADR：[002](../decisions/002-runtime-model.md) · [005](../decisions/005-go-libraries.md) · [006](../decisions/006-rag-architecture.md)
 
 ## 1. 部署形态
@@ -82,7 +82,7 @@ docker compose -f compose.yaml -f compose.full.yaml up -d
 | 项 | 措施 |
 |---|---|
 | `.env` | 权限 600、属主运行用户；secrets 边界见 01 §6.4（永不回显） |
-| WebUI | JWT 12h；登录失败锁定（04 §4）；默认建议监听 `127.0.0.1` + 反向代理 TLS；公网直接暴露时文档给出最小化建议（防火墙/fail2ban） |
+| WebUI | HttpOnly opaque session 12h + SameSite=Strict + Origin 校验 + 登录失败锁定（04 §4）；默认监听 `127.0.0.1` + 反向代理 TLS；公网直接暴露时文档给出最小化建议（防火墙/fail2ban） |
 | Qdrant | API key + compose 内网（不映射公网端口）；裸机部署绑定 127.0.0.1 |
 | MySQL | 专用最小权限账号（仅 sakura_bot 库）；绑定内网/127.0.0.1 |
 | Bot token 日志脱敏 | platform/botapi 的 HTTP 日志**不打印完整 URL**（token 在 path 中）；错误信息脱敏 |

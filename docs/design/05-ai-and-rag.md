@@ -1,6 +1,6 @@
 # 05 AI 与 RAG
 
-- 状态：📝 R3.1 修订版，待快速一致性复核
+- 状态：📝 R3.1.1，待用户核对修改点
 - 受约束 ADR：[006](../decisions/006-rag-architecture.md) · [007](../decisions/007-scope-phases.md) · [008](../decisions/008-rich-message-transport.md)
 
 ## 1. AIProvider（platform/ai，openai-go + `option.WithBaseURL`）
@@ -86,7 +86,7 @@ relevance ranking → rerank → token-budget selection（按相关度从高到�
 
 ## 6. stale summary（P1 基础 / P2 策略化）
 
-- 触发：消息 Edit/Delete 事件 → 反查 `summary_sources(message_id)` → `messages.current_revision != summary_sources.revision` → `summaries.is_stale = 1`（Delete 依赖 02 §2.3 的 `current_revision += 1`）。
+- 触发：消息 Edit/Delete 事件 → 反查 `summary_sources(message_id)` → `messages.current_revision != summary_sources.revision` → **同一事务**内置 `summaries.is_stale = 1` **并重置 `index_state = pending`**（R3.1.1：payload 同步同样走 durable state，消灭「MySQL 已 stale、crash 后 Qdrant 仍 is_stale=false」窗口）→ derived worker/repair 重新 upsert（payload.is_stale=true）→ `index_state = indexed`。Delete 依赖 02 §2.3 的 `current_revision += 1`。
 - 策略（settings.rag.stale_policy）：`downgrade`（检索默认排除/降权 stale summary，payload `is_stale` filter）| `regenerate`（入队重生成）。P1 只实现 downgrade；P2 增 regenerate。
 
 ## 7. reindex worker（blue/green，02 §2.8 状态机）

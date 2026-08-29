@@ -71,3 +71,13 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 05：AIProvider 补 Answer 能力；Context Builder 顺序修正（预算裁剪在时间排序之前）；/rag/answer 只传 IDs 后端重建；P2 补 User Memory 层与多模态回答链（原图重取→multimodal，不可得→persisted description）。
 - 07：更名 07-testing-milestones-reference.md；integration 必跑策略（P0 MySQL/P1+Qdrant，testcontainers 无需 TG secret）；P0/P2 验收新增 4 个用例（gap-too-long 恢复、相册全成员 dedup、User Memory、讨论群图片多模态）。
 - 状态：全部文档 R3.1，待用户快速一致性复核；通过后批准总体设计 → Go P0 实施计划（计划确认前零实现代码）。
+
+## 2026-08-29 · 会话 1（续）：R3.1.1 cleanup
+
+用户复核批准 R3.1 主体，指出 3 组功能一致性残留+纯文字：
+- ①ChatRef 传播到底：forward_rules 增 source/target_chat_type；forwarded_messages PK 五列（含双 kind）；ForwardedRepo.Exists target 改 domain.ChatRef；03 规则匹配/去重键/过滤链引用同步。
+- ②RAG 五洞：media_analyses.index_state 补全五态；vision point ID 改 vision:{messages.id}:{media_key}（镜像 MySQL PK 防碰撞）；payload kind 补 vision_description/extracted_memory 六种 + mysql_ref 统一三元组（source_table+source_id+source_subkey?）；stale 置位同事务重置 index_state=pending（payload 同步走 durable state）；02 Delete 描述改为事务化状态机（事务内不调 Qdrant；invalidation 仅加速器不阻塞 commit，durability ≠ queue delivery）。
+- ③gotd callback scope 修正：OnLoadChannelStateFailed(channelID)=channel 级补抓；OnTooLong()/OnLoadUserStateFailed()=account/global 级全量 reconciliation；+OnChannelInaccessible(channelID)=标记 unavailable 停止补抓。
+- 纯文字清理：01 ready channel 残留、03 相册「以首条判定」、06 JWT 残留、overview R3→R3.1 统一。
+- 顺手项（采纳）：04 前端删 pinia/axios（Vue composables + fetch 封装，需要时另行立项）；07 集成测试确定 GitHub Actions service containers + 本地 compose（不用 testcontainers-go）。
+- 状态：01/02 冻结（R3.1）；03–07 为 R3.1.1 待用户核对修改点；核对通过即宣布总体设计批准 → Go P0 实施计划。
