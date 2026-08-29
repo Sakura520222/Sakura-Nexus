@@ -1,0 +1,38 @@
+# golangci-lint 配置（T0.2 交付；depguard 落点——01 §2.2 依赖方向 CI 强制）
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        # 领域包禁止触碰基础设施具体库（ADR/01 §2.2；platform 是唯一实现层）
+        no-infra-in-domain:
+          files:
+            - "**/internal/forwarding/**"
+            - "**/internal/summary/**"
+            - "**/internal/rag/**"
+            - "**/internal/conversation/**"
+            - "**/internal/webapi/**"
+            - "**/internal/domain/**"
+          deny:
+            - pkg: github.com/gotd/td
+              desc: 领域包只依赖接口；gotd 实现在 internal/platform/telegram
+            - pkg: github.com/qdrant/go-client
+              desc: 领域包只依赖接口；qdrant 实现在 internal/platform/qdrant（P1）
+            - pkg: github.com/jmoiron/sqlx
+              desc: 领域包只依赖 repository 接口；实现在 internal/platform/mysql
+            - pkg: github.com/openai/openai-go
+              desc: 领域包只依赖 AIProvider 接口；实现在 internal/platform/ai
+        # net/http 仅 webapi 与 platform 允许
+        http-only-webapi:
+          files:
+            - "!**/internal/webapi/**"
+            - "!**/internal/platform/**"
+            - "!**/cmd/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: net/http
+              desc: HTTP 属 webapi/platform 层；领域包不得直接使用 net/http

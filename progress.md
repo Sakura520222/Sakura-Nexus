@@ -120,3 +120,10 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - ④§6 补「continuous」定义：有序流中无更早 unresolved，非 message_id 数值连续（ID 空洞正常）。
 - 非阻塞采纳：T0.2 交付仅 MySQL 的 compose.test.yaml（本地 -tags integration 固定环境）。
 - 状态：R1.1 待核对指定修改点；通过即批准 T0.1 开工。
+
+## 2026-08-29 · 会话 1（续）：P0 开工（T0.1、T0.2）
+
+- **T0.1 完成**（2d8eda0）：canonical module path、最小入口、11 个包骨架（01 §2.1）、Makefile、.env.example；build/-version/gofmt/vet 全过。
+- **T0.2 完成**：ci.yml（lint/test+MySQL service container/build 三 job）+ .golangci.yml（v2，depguard 领域禁 infra 规则）+ integration 骨架（env 契约测试）。本地验证：单测 PASS、本机 MySQL 凭据下集成契约 PASS、golangci-lint 0 issues。
+- 本地环境适配（用户决定，R1.2 实施期修订）：本地集成测试**不用容器**——用户提供自备 MySQL 8.0.45（test_db/test_user，仅 localhost）；compose.test.yaml 移除；凭据入 .env.test.local（gitignored）；CI 保留 service container（runner 必需）。07 §1.2 与计划 T0.2 已同步标注。
+- 环境备注：本机无 cgo/gcc → 本地 go test 不带 -race（Makefile 提供 test-local）；门禁以 CI 的 -race 为准。

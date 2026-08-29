@@ -85,7 +85,7 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 | # | 任务 | 交付物 | 验证 | 依赖 |
 |---|---|---|---|---|
 | T0.1 | Go module 骨架：`go.mod`（**`module github.com/Sakura520222/Sakura-Bot`**，从第一天用 canonical path）、`cmd/sakura-bot/main.go`（仅 --version）、`internal/{app,config,logging,platform/{mysql,telegram,botapi,ai},forwarding,webapi,domain}` 空包、Makefile、`.env.example`（01 §6.1 全量） | 可编译空项目 | `go build ./...` | — |
-| T0.2 | **渐进 CI（R1：仅 Go 部分）**：gofmt、golangci-lint（**交付 `.golangci.yml` + depguard 规则落点**）、`go test -race`、`go build`、MySQL integration 基础设施（service container + `integration` build tag 骨架）+ **仅 MySQL 的 `compose.test.yaml`**（R1.1：本地固定环境，自 T1.1 起跑 `-tags integration` 不依赖正式 compose）。web/Docker job **不在此阶段创建**（分别由 T5.4/T6.2 追加），不用 `if: exists(...)` 假绿 | `.github/workflows/ci.yml` + `.golangci.yml` + `compose.test.yaml` | push 后 CI 绿 | T0.1 |
+| T0.2 | **渐进 CI（R1：仅 Go 部分）**：gofmt、golangci-lint（**交付 `.golangci.yml` + depguard 规则落点**）、`go test -race`、`go build`、MySQL integration 基础设施（CI service container + `integration` build tag 骨架）。**本地集成环境（R1.2 实施期修订，用户决定）：不用容器——`SAKURA_TEST_MYSQL_*` 指向用户自备的本机 MySQL 实例**（凭据存 gitignore 的 `.env.test.local`）；~~compose.test.yaml~~ 已移除。web/Docker job **不在此阶段创建**（分别由 T5.4/T6.2 追加），不用 `if: exists(...)` 假绿 | `.github/workflows/ci.yml` + `.golangci.yml` | push 后 CI 绿（本地已验证：单测/集成契约/lint 0 issues） | T0.1 |
 | T0.3 | `internal/config`：.env struct + 必填校验 + 加载 | U：缺必填报全量缺失项 | U | T0.1 |
 
 ### Phase 1：Telegram 风险验证（GATE-1）

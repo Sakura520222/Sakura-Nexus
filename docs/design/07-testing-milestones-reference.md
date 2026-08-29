@@ -22,7 +22,7 @@
 
 ### 1.2 集成测试（R3.1：**必跑**，不依赖任何 Telegram 凭据）
 
-- 运行环境（R3.1.1 确定）：**GitHub Actions service containers + 本地 docker compose**——不引入 testcontainers-go（不静默新增 Go 依赖）。
+- 运行环境（R3.1.1 确定；**2026-08-29 实施期修订**）：**CI = GitHub Actions service containers；本地 = 自备 MySQL 实例**（`SAKURA_TEST_MYSQL_*` 指向；不用本地容器、不引入 testcontainers-go——不静默新增 Go 依赖）。
 - **P0：MySQL 集成必跑**；**P1 起：MySQL + Qdrant 集成必跑**。
 - 覆盖：goose 迁移幂等；repositories CRUD 与事务语义；update state / peer storage / peer aliases 往返（gotd storage 接口实现）；P1：Qdrant upsert/search/alias 切换/reindex checkpoint（per-kind）续跑；索引状态机 + repair 的崩溃恢复模拟（kill -9 后重启收敛）。
 - 真实 Telegram：仍仅手动 smoke（`examples/smoke/`），不进 CI。
