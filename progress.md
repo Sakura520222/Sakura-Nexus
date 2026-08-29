@@ -39,3 +39,10 @@
 - 事实澄清：16 章结构原提案中并无 Rich Markdown 项（源自用户放入的 Bot API 10.2 资料）。
 - 总体设计结构定稿：overview + 7 领域文件（用户折中方案）。overview.md 已成文（架构总图 / 数据流 / invariants / 文档地图 / 分期）；01–07 骨架就位（含受约束 ADR 与章节映射，用户三处补充落在 01/03/05）。
 - 下一步：按 01→07 顺序逐文件成文 → 整包交用户审 → 批准后写 Go 版 P0 实施计划 → 计划确认后才动代码。
+
+## 2026-08-29 · 会话 1（续）：overview invariant 定稿 + 01/02 成文
+
+- overview 四条 invariant 定稿（第 4 条提升为通用「业务逻辑依赖抽象而非基础设施实现」+ 具体禁止项清单）。
+- 01-runtime-and-components.md 成文：composition root/service 抽象、CORE/DEGRADED 两类服务与 fatal 判定、包结构与依赖方向（depguard CI 强制、接口消费者定义、反上帝对象）、P0 接口与 P1/P2 预留边界（只留签名不做假实现）、SendRequest 统一出站模型（Rich 不长平行业务 API）、channel 三规则（owner/容量/关闭责任）、.env v2 清单、settings scope 表、secrets 不回显。
+- 02-storage.md 成文：Telegram ID 规范（裸 ID + -100 转换唯一边界在 platform/botapi）、时间四件套语义、gotd_sessions（version+原子写）、messages canonical / message_revisions immutable 分离与写入协议（New/Edit/Delete）、conversations 三方身份建模、summaries+stale、Qdrant 双 named vector（dense+sparse 预留，P2 不重建 collection）、point UUIDv5 不含 revision（Edit 覆盖）、SoT 边界（vector 不回写 MySQL）、reindex_state checkpoint、v1→v2 迁移映射（含 Telethon session→gotd 转换命令）。
+- 状态：01+02 待用户审；03-07 未动；无实现代码。

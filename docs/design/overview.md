@@ -45,10 +45,26 @@
 
 ## 3. Architecture Invariants（绕过即架构违规）
 
-1. `MySQL = Source of Truth`；`Qdrant = Derived / Disposable Index`
-2. `Conversation Recording ≠ AI Reply Triggering`
-3. `Retrieve by Relevance → Rerank → Select → Order by Time → Build Context`
-4. （边界）`AIProvider` 不感知 Telegram 协议；业务层不直接调用 `sendRichMessage` / `qdrant.Search` 等具体实现
+```text
+1. MySQL = Source of Truth；Qdrant = Derived / Disposable Index
+2. Conversation Recording ≠ AI Reply Triggering
+3. Retrieve by Relevance → Rerank → Select → Order by Time → Build Context
+4. Business Logic Depends on Interfaces, Not Transport / Storage Implementations
+```
+
+第 4 条的具体禁止项：
+
+```text
+SummaryService / RAGService / ForwardingService / ConversationService
+    ✗ net/http Telegram Bot API 直调
+    ✗ gotd 具体 client
+    ✗ qdrant 具体 client
+    ✗ sqlx 裸 DB 调用
+        ↓ 必须依赖
+Sender / Fetcher / Retriever / Repository / AIProvider 等接口
+```
+
+ADR-008 的「`AIProvider` 只产出通用 `AIResponse`、Rich Markdown 由 presentation 层负责」是第 4 条的一个具体实例。接口定义与依赖方向细化见 [01-runtime-and-components.md](01-runtime-and-components.md) 第 2–3 节。
 
 ## 4. 文档地图（overview + 7 个领域文件）
 
