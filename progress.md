@@ -166,3 +166,10 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 根因 2（修复过程中暴露）：.golangci.yml 第二次 Edit 把 formatters 段插在中间，settings 被挤到 formatters 下 → depguard 配置失联 → depguard 默认 Main 规则（仅标准库）拦截 17 处 import。修复：settings 归位；config verify 通过；**以 guard_probe 临时违规文件主动验证 no-infra-in-domain 规则真实生效**（防再次静默失效）。
 - CI 模拟（干净 clone）：gofmt/vet/build 全绿；本地 lint 0 issues + build+test OK。已提交待 push。
 - 附带：T1.2 的 UserAuth 状态机（auth.go，基于 gotd 真实 API：SendCode→SignIn(ctx,phone,code,codeHash)→Password；tgerr SESSION_PASSWORD_NEEDED 判定）随本 commit 入库；T1.2 剩余：login-user CLI 子命令 + smoke-user。
+
+## 2026-08-29 · 会话 1（续）：T1.2 代码完成（S 冒烟待用户终端登录）
+
+- CI 二次修复：golangci-lint 安装改 module proxy 固定版本 @v2.13.2（install.sh 下载 releases 资产 SHA256 校验失败——下载截断）。a0d135b。
+- T1.2 交付（199b329，全绿）：UserClient（含 WithUpdateHandler 选项、Raw() 仅供 auth/Manager wiring）；login-user 交互子命令（UserAuthService 状态机的 CLI presentation，验证码/2FA 终端输入）；smoke-user（免登录复用 session + 收一条真实 update 打印退出，handler 覆盖 Updates/UpdatesCombined/UpdateShort 三形态）。
+- 过程修正：tg.UpdatesClass 动态类型是容器（*tg.Updates 等，消息在 .Updates 切片），UpdateNewMessage 属 UpdateClass——按 gotd 生成代码核实后实现。
+- **待用户操作**：终端运行 go run ./cmd/sakura-nexus login-user（输入手机号/验证码/2FA；.env 可预填 USERBOT_PHONE_NUMBER）；完成后我跑 smoke-user 验证。
