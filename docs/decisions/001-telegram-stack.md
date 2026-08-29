@@ -27,6 +27,7 @@
 
 - `gotd/botapi`（experimental）**不作为核心依赖**。
 - 删除旧项目的兼容路径：**Bot 抓取降级、UserBot 回退发送，一律不存在**。User 抓取 / Bot 发送，无降级。
+- **ADR-008 例外（2026-08-29 补充）**：需要 Rich Markdown 的消息（AI 回复/总结等）允许经 HTTP Bot API `sendRichMessage` 发送，是「Bot 发送走 gotd/td」的唯一专项例外，详见 [008-rich-message-transport.md](008-rich-message-transport.md)。
 
 ### 内存预期
 

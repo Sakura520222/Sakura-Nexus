@@ -32,3 +32,10 @@
 - 三条 Architecture Invariants 正式写入 ADR-006；blue/green + alias reindex 正式接受。
 - ADR-007 拍板：P0=A+B+C（production vertical slice）；P1=D+F+RAG Query Harness；P2=E+G；强制「分期只裁功能不裁架构」（Retriever/Reranker/VisionProcessor/QueryAnalyzer/MemoryStore 第一天留接口边界）。
 - 目标架构（001-006）冻结。下一步：总体设计文档结构给用户审 → 成文 → Go 版 P0 实施计划 → 确认后才动代码。
+
+## 2026-08-29 · 会话 1（续）：ADR-008 与总体设计结构落盘
+
+- 新增 ADR-008（Rich Message 经 Bot API HTTP 出站，ADR-001 唯一专项例外；net/http 直调、不新增 SDK；Draft 仅私聊、thread≠forum topic 两条硬限制；renderer 确定性校验与 block 边界切分）。001 与索引已同步标注例外关系。
+- 事实澄清：16 章结构原提案中并无 Rich Markdown 项（源自用户放入的 Bot API 10.2 资料）。
+- 总体设计结构定稿：overview + 7 领域文件（用户折中方案）。overview.md 已成文（架构总图 / 数据流 / invariants / 文档地图 / 分期）；01–07 骨架就位（含受约束 ADR 与章节映射，用户三处补充落在 01/03/05）。
+- 下一步：按 01→07 顺序逐文件成文 → 整包交用户审 → 批准后写 Go 版 P0 实施计划 → 计划确认后才动代码。
