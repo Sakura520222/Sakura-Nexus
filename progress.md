@@ -134,3 +134,12 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - T1.0 完成（ab987b8，含一次 amend）：最小 domain——PeerKind（含 MarshalJSON 字符串约定/未知值拒绝）、ChatRef（裸 ID + String）、MessageRef（UNIQUE 三元组内存形态）、ChannelMessage（GroupedID/ThreadTopID/ForwardHeader 原创判定）、MediaRef（Key + 可刷新 FileRef）、Entity。
 - 过程教训（已修正）：①命令 `go test | grep` 管道掩盖失败退出码导致红测试入库，发现后修复并 amend（保证 commit 绿的门禁）；②两次手写标准库已有函数（contains/itoa），均已改用 strings/strconv。
 - 下一步 T1.1：Bot 连通（Auth().Bot+Self）+ goose runner + 0001 迁移 + sqlx 池 + gotd session storage + smoke-bot——S 冒烟需要真实 TELEGRAM_BOT_TOKEN/API_ID/API_HASH（等待用户提供 .env 或自跑冒烟）。
+
+## 2026-08-29 · 会话 1（续）：T1.1 代码完成（S 冒烟待 API 凭据）
+
+- 用户提供：测试 Bot Token + 生产 MySQL 库 sakura_bot（sakura_bot 用户，localhost）。已写入本地 .env（gitignored）；test_db 继续专职集成测试（.env.test.local）。
+- T1.1 交付：migrations/0001_telegram_foundation.sql（七表，冻结设计 02 §2.1/§2.3 R3.1.1）+ embed + goose provider runner（单一实现）+ sqlx 池（DSN parseTime/loc=UTC）+ gotd session storage（ErrNotFound/upsert）+ BotClient（Auth().Bot+Self+VerifySelf）+ cmd/smoke/smoke-bot。
+- I 验证 PASS（本机 test_db）：迁移幂等 ×2、七表齐备、session 往返 + upsert 恰 1 行。
+- 依赖引入：gotd/td、sqlx、go-sql-driver/mysql、goose v3.27.3（goproxy.cn 镜像解决 proxy.golang.org 断流）。
+- 过程修正：再次出现 lint 未过先 commit（管道掩盖退出码），修复后 amend——已确立「lint 不过不 commit」流程。
+- **阻塞（仅用户可解）**：smoke-bot 首次真实连接需要 TELEGRAM_API_ID / TELEGRAM_API_HASH（my.telegram.org，绑定用户真实账号）；缺项时 smoke 已能清晰报出。
