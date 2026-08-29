@@ -180,3 +180,18 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - smoke-user PASS：免登录复用 session + 收到真实频道 update（msg_id=138663，正文略——不复制用户频道内容）。
 - GATE-1 验证进度：Bot 连通 ✓（T1.1）、User 连通 ✓（T1.2）。剩 T1.3 状态闭环（存储×4 + Manager wiring + dispatcher + MessageRepository + smoke-recovery）打穿 GATE-1。
 - 待 push：209e8d1、0a66cd8 及本轮记录。
+
+## 2026-08-29 · 会话 1（续）：T1.3 完成 + GATE-1 PASS
+
+- T1.3 交付（8915fa4，lint 0 / 单测 4 包 / 集成三契约全过）：
+  - StateStorage（gotd updates.StateStorage 九方法，account+user_id 分区，部分更新 ErrStateNotFound 语义）
+  - PeerStorage（contrib storage.PeerStorage 的 MySQL 实现：Peer JSON 入 data、Assign/Resolve 别名归一化、Iterate）
+  - MessageRepository（canonical 写入协议：New 幂等吸收 / Edit revision+1 / Delete 同事务 deleted_at+revision+delete_pending+不可变事件，集成测试断言 create→edit→delete 序列）
+  - SetupUserUpdates wiring：Manager + contrib UpdateHook（peers 收集）+ updhook.UpdateHook/AffectedHook + 五回调（channel/global/inaccessible 按 R3.1.1 scope）+ Recovery 定向 GetHistory 补抓（复用同一管线，幂等靠唯一键）
+  - 修复：媒体类型优先级（GIF=Animated+Video 双 attributes）、GetFwdFrom 条件字段、InputPeerChannel 等 gotd 实际类型差异
+- **smoke-recovery 两轮 PASS（GATE-1 终验）**：
+  - 第一轮 45s：实时落库 16 条（含 DELETE 事件同步），messages 0→16
+  - 第二轮重启：**离线期间 346 条经 getDifference 补齐**（state 恢复正常，16→362，无重复入库）
+  - 正文均为用户频道内容，记录仅存计数与 msg_id
+- **GATE-1 宣告 PASS**：Bot 连通（T1.1）✓ + User 连通（T1.2）✓ + 状态闭环（T1.3：可靠落库/重启 catch-up）✓。断线重连为 gotd 内建（进程级重启恢复已实证；DEPENDENCY_UNAVAILABLE 行为将在 T2.0 单测覆盖）。
+- 依据用户边界要求：GATE-1 PASS 后方可进入 T2.0（production lifecycle）——下一任务。
