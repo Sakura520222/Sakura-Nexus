@@ -7,7 +7,7 @@ import (
 
 	goose "github.com/pressly/goose/v3"
 
-	"github.com/Sakura520222/Sakura-Bot/migrations"
+	"github.com/Sakura520222/Sakura-Nexus/migrations"
 )
 
 // MigrateUp 以嵌入的迁移文件执行 goose Up（启动即迁移，01 §1.1）。

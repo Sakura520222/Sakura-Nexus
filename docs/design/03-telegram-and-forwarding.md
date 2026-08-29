@@ -159,5 +159,5 @@ WebUI 触发：`POST /api/forwarding/rules/{id}/backfill {limit}` → `GetHistor
 
 ### 3.9 临时文件管理
 
-- 下载目录：系统临时目录下 `sakura-bot/` 子目录；文件名带 (chat_id, message_id) 便于排查。
+- 下载目录：系统临时目录下 `sakura-nexus/` 子目录；文件名带 (chat_id, message_id) 便于排查。
 - 生命周期：发送完成/失败即删；启动时清理残留（崩溃保护）；目录可配。

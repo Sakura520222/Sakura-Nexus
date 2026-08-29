@@ -1,4 +1,4 @@
-# Sakura-Bot Go P0 实施计划（R1）
+# Sakura-Nexus Go P0 实施计划（R1）
 
 - 状态：📝 R1.1 修订版，待用户核对——**批准前零实现代码**
 - 日期：2026-08-29（R0 → R1 → R1.1；R1 落实 4 项必改 + Gate 加强；R1.1 闭合 3 个实施前缺口 + cursor 定义 + compose.test.yaml）
@@ -84,7 +84,7 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 
 | # | 任务 | 交付物 | 验证 | 依赖 |
 |---|---|---|---|---|
-| T0.1 | Go module 骨架：`go.mod`（**`module github.com/Sakura520222/Sakura-Bot`**，从第一天用 canonical path）、`cmd/sakura-bot/main.go`（仅 --version）、`internal/{app,config,logging,platform/{mysql,telegram,botapi,ai},forwarding,webapi,domain}` 空包、Makefile、`.env.example`（01 §6.1 全量） | 可编译空项目 | `go build ./...` | — |
+| T0.1 | Go module 骨架：`go.mod`（**`module github.com/Sakura520222/Sakura-Nexus`**，从第一天用 canonical path）、`cmd/sakura-nexus/main.go`（仅 --version）、`internal/{app,config,logging,platform/{mysql,telegram,botapi,ai},forwarding,webapi,domain}` 空包、Makefile、`.env.example`（01 §6.1 全量） | 可编译空项目 | `go build ./...` | — |
 | T0.2 | **渐进 CI（R1：仅 Go 部分）**：gofmt、golangci-lint（**交付 `.golangci.yml` + depguard 规则落点**）、`go test -race`、`go build`、MySQL integration 基础设施（CI service container + `integration` build tag 骨架）。**本地集成环境（R1.2 实施期修订，用户决定）：不用容器——`SAKURA_TEST_MYSQL_*` 指向用户自备的本机 MySQL 实例**（凭据存 gitignore 的 `.env.test.local`）；~~compose.test.yaml~~ 已移除。web/Docker job **不在此阶段创建**（分别由 T5.4/T6.2 追加），不用 `if: exists(...)` 假绿 | `.github/workflows/ci.yml` + `.golangci.yml` | push 后 CI 绿（本地已验证：单测/集成契约/lint 0 issues） | T0.1 |
 | T0.3 | `internal/config`：.env struct + 必填校验 + 加载 | U：缺必填报全量缺失项 | U | T0.1 |
 
@@ -94,7 +94,7 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 |---|---|---|---|---|
 | T1.0 | **最小 domain 类型（R1 前移）**：ChatRef/PeerKind、MessageRef、ChannelMessage、MediaRef、Entity——dispatcher 与 canonical writer 的输入输出类型，保证 repository **不吃 gotd `tg.Message`** | 类型 + 单测 | U | T0.3 |
 | T1.1 | **Bot 客户端最小连通**：`platform/telegram.BotClient` + MySQL `session.Storage` + **`0001_telegram_foundation.sql`（§4 七表）** + **可复用 goose runner（R1.1：embed migrations + 执行 0001——迁移机制单一实现，Phase 2 不换工具）** + 最小 sqlx 池（T2.2 完善）+ 登录验证流程 **`Auth().Bot(ctx, token)` → `Self(ctx)` → 校验 `self.Bot == true` / ID / username**（MTProto，不调 HTTP getMe） | `cmd/smoke/smoke-bot`：登录→Self→打印身份→优雅关闭（session 落库） | **S（首次真实 TG）** + I（storage 往返） | T1.0, T0.2 |
-| T1.2 | **User 客户端最小连通**：`UserClient` + `sakura-bot login-user` CLI 子命令——**UserAuthService/auth flow 状态机在此唯一实现**（手机号/验证码/2FA），后续 T5.3 WebUI 向导仅作 presentation adapter 复用，不得重写第二套 | `cmd/smoke/smoke-user`：登录→收一条 update→打印→重启免登录 | S + I | T1.1 |
+| T1.2 | **User 客户端最小连通**：`UserClient` + `sakura-nexus login-user` CLI 子命令——**UserAuthService/auth flow 状态机在此唯一实现**（手机号/验证码/2FA），后续 T5.3 WebUI 向导仅作 presentation adapter 复用，不得重写第二套 | `cmd/smoke/smoke-user`：登录→收一条 update→打印→重启免登录 | S + I | T1.1 |
 | T1.3 | **状态闭环（R1 扩充）**：① `telegram_update_states/channel_states/peers/aliases` 的 gotd 存储实现；② **完整 Manager wiring：`updates.Manager` + `UpdateHandler` + `updhook.UpdateHook` + `updhook.AffectedHook`（自身 read/delete 返回的 affectedMessages 同步更新本地 PTS）+ `StateStorage` + dispatcher 雏形**；③ 四个 recovery callback 处置（channel 级补抓 / global 全量 reconciliation / inaccessible→unavailable）；④ **正式 MessageRepository / canonical writer**（New/Edit/Delete 单一写入协议，02 §2.3） | U（状态机/fake writer）+ I（storage 往返/换号清旧）+ **S：smoke-recovery**（重启 catch-up、拔网重连、真实频道发消息→messages 落库） | U+I+S | T1.2 |
 | **GATE-1** | 真实频道消息可靠落库 + 重启 catch-up + 断线恢复全部成立（smoke-bot/user/recovery 为其验证内容）。**不成立 → 停止实施，回设计层重估（可能涉及 ADR 修订）** | 冒烟记录入 progress.md | S | T1.3 |
 
@@ -145,8 +145,8 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 
 | # | 任务 | 交付物 | 验证 | 依赖 |
 |---|---|---|---|---|
-| T6.1 | `sakura-bot healthcheck` 子命令（net/http GET 本机 /api/health） | 手测 | S | T5.2 |
-| T6.2 | Dockerfile（多阶段+distroless+HEALTHCHECK 子命令）、**`compose.yaml`（仅 sakura-bot）+ `compose.full.yaml`（sakura-bot + MySQL）**（R1.1：**P0 无任何 Qdrant 交付物**；P1 再把 Qdrant 加入 full overlay 并新增 qdrant systemd 示例）、`deploy/sakura-bot.service`；**CI 追加 docker job（docker build + 双 compose config -q）** | compose config 两组合通过 + 本地容器起停 | S | GATE-3 |
+| T6.1 | `sakura-nexus healthcheck` 子命令（net/http GET 本机 /api/health） | 手测 | S | T5.2 |
+| T6.2 | Dockerfile（多阶段+distroless+HEALTHCHECK 子命令）、**`compose.yaml`（仅 sakura-nexus）+ `compose.full.yaml`（sakura-nexus + MySQL）**（R1.1：**P0 无任何 Qdrant 交付物**；P1 再把 Qdrant 加入 full overlay 并新增 qdrant systemd 示例）、`deploy/sakura-nexus.service`；**CI 追加 docker job（docker build + 双 compose config -q）** | compose config 两组合通过 + 本地容器起停 | S | GATE-3 |
 | T6.3 | README（快速开始、两形态部署、冒烟清单） | 文档 | — | T6.2 |
 | T6.4 | **P0 验收执行**：07 §3 P0 checklist 逐项（gap-too-long 定向恢复、相册全成员 dedup、24h 稳定性 + 内存记录） | 验收报告（progress.md） | S | T6.2, T6.3 |
 | **GATE-4** | P0 完成 → 交付用户验收 | — | — | T6.4 |

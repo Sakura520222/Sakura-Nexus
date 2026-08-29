@@ -12,9 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Sakura520222/Sakura-Bot/internal/config"
-	"github.com/Sakura520222/Sakura-Bot/internal/platform/mysql"
-	"github.com/Sakura520222/Sakura-Bot/internal/platform/telegram"
+	"github.com/Sakura520222/Sakura-Nexus/internal/config"
+	"github.com/Sakura520222/Sakura-Nexus/internal/platform/mysql"
+	"github.com/Sakura520222/Sakura-Nexus/internal/platform/telegram"
 )
 
 func main() {

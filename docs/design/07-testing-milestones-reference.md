@@ -47,7 +47,7 @@ go test -race -tags integration ./...   # MySQL（P0 起）+ Qdrant（P1 起）�
 # 3. build
 go build ./...
 pnpm --dir web build
-docker build -t sakura-bot .
+docker build -t sakura-nexus .
 
 # 4. 校验与安全
 docker compose -f compose.yaml config -q

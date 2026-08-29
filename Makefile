@@ -1,11 +1,11 @@
-# Sakura-Bot v2 —— 构建/测试/检查（Go 部分；前端 job 由 T5.4 追加）
+# Sakura-Nexus —— 构建/测试/检查（Go 部分；前端 job 由 T5.4 追加）
 
-BINARY := sakura-bot
+BINARY := sakura-nexus
 
 .PHONY: build test test-local test-integration lint fmt fmt-check tidy
 
 build:
-	go build -o $(BINARY) ./cmd/sakura-bot
+	go build -o $(BINARY) ./cmd/sakura-nexus
 
 test:
 	go test -race ./...

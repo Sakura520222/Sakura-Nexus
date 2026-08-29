@@ -8,15 +8,15 @@
 ### 1.1 裸机 + systemd（主推）
 
 ```ini
-# deploy/sakura-bot.service（通用 unit：不硬绑具体 MySQL/Qdrant 服务名——各发行版命名不一，P0 也不依赖 Qdrant）
+# deploy/sakura-nexus.service（通用 unit：不硬绑具体 MySQL/Qdrant 服务名——各发行版命名不一，P0 也不依赖 Qdrant）
 [Unit]
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 User=sakura
-ExecStart=/usr/local/bin/sakura-bot
-EnvironmentFile=/etc/sakura-bot/.env    # 权限 600，属主 sakura
+ExecStart=/usr/local/bin/sakura-nexus
+EnvironmentFile=/etc/sakura-nexus/.env    # 权限 600，属主 sakura
 Restart=on-failure                     # 非 watchdog（01 §1.5）；exit 75（重启请求）非零同样会拉起
 RestartSec=5
 # 资源保护（示例值，按部署实际调整，非架构硬限制）
@@ -39,19 +39,19 @@ WantedBy=multi-user.target
 - **HEALTHCHECK（R3.1 修正）**：distroless 无 shell/curl/wget，也没有名为 `GET` 的可执行文件——使用程序自带子命令，内部以 `net/http` GET 本机 health endpoint：
 
 ```dockerfile
-HEALTHCHECK CMD ["/app/sakura-bot", "healthcheck"]
+HEALTHCHECK CMD ["/app/sakura-nexus", "healthcheck"]
 ```
 
 ### 1.3 docker-compose（R3.1：双文件叠加，不用 profiles）
 
 ```text
-compose.yaml        # 仅 sakura-bot（连接用户自备的外部 MySQL/Qdrant）
+compose.yaml        # 仅 sakura-nexus（连接用户自备的外部 MySQL/Qdrant）
 compose.full.yaml   # overlay：+ mysql + qdrant + depends_on 健康依赖
 docker compose -f compose.yaml -f compose.full.yaml up -d
 ```
 
 - profiles 是 service 级属性且未启用的依赖可能形成无效模型，弃用；双文件叠加最直观。
-- `sakura-bot` 服务：`build: .`、`env_file: .env`、`restart: unless-stopped`、`mem_limit: 768m`（示例值可调）；compose.full.yaml 中 mysql:8（volume + healthcheck）、qdrant/qdrant（volume + `QDRANT__SERVICE__API_KEY`，**不映射公网端口**）。
+- `sakura-nexus` 服务：`build: .`、`env_file: .env`、`restart: unless-stopped`、`mem_limit: 768m`（示例值可调）；compose.full.yaml 中 mysql:8（volume + healthcheck）、qdrant/qdrant（volume + `QDRANT__SERVICE__API_KEY`，**不映射公网端口**）。
 - WebUI 监听：compose override 将 `WEBUI_HOST` 设为 `0.0.0.0`（.env 裸机默认 127.0.0.1，01 §6.1）。
 
 ## 2. 升级与回滚

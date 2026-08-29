@@ -334,7 +334,7 @@ UUIDv5(namespace=SakuraBot, name):
 
 ## 5. 初始化与重建
 
-- Sakura-Bot v2 从空 MySQL / 空 Qdrant **全新初始化**。
+- Sakura-Nexus 从空 MySQL / 空 Qdrant **全新初始化**。
 - MySQL schema 仅由 embed goose migrations 管理。
 - **不支持导入旧 Sakura-Bot / TG-Forwarder 的配置、消息、session、向量或运行数据**。
 - User 首次部署通过 v2 登录流程（WebUI 向导）建立新的 gotd session。

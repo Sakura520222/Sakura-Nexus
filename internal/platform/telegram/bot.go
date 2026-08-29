@@ -9,7 +9,7 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 
-	"github.com/Sakura520222/Sakura-Bot/internal/domain"
+	"github.com/Sakura520222/Sakura-Nexus/internal/domain"
 )
 
 // BotClient 是唯一 Bot 账号的 gotd MTProto 客户端（ADR-001：默认发送通道、

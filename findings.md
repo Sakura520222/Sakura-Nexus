@@ -11,7 +11,7 @@
 
 （待两个 Explore 子代理返回后填入/引用）
 
-### Sakura-Bot 源项目 — 已完成 ✅（全文见 [docs/research/sakura-bot-report.md](docs/research/sakura-bot-report.md)）
+### Sakura-Bot 源项目 — 已完成 ✅（全文见 [docs/research/sakura-nexus-report.md](docs/research/sakura-nexus-report.md)）
 
 要点：
 - **双进程**：主进程（Telethon 主 Bot + UserBot + APScheduler + FastAPI/uvicorn + ChromaDB 共存一个事件循环）+ QA Bot 子进程（python-telegram-bot）。

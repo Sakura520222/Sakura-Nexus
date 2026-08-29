@@ -143,3 +143,10 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 依赖引入：gotd/td、sqlx、go-sql-driver/mysql、goose v3.27.3（goproxy.cn 镜像解决 proxy.golang.org 断流）。
 - 过程修正：再次出现 lint 未过先 commit（管道掩盖退出码），修复后 amend——已确立「lint 不过不 commit」流程。
 - **阻塞（仅用户可解）**：smoke-bot 首次真实连接需要 TELEGRAM_API_ID / TELEGRAM_API_HASH（my.telegram.org，绑定用户真实账号）；缺项时 smoke 已能清晰报出。
+
+## 2026-08-29 · 会话 1（续）：项目定名 Sakura-Nexus
+
+- 用户发布仓库至 github.com/Sakura520222/Sakura-Nexus 并确认新项目使用新名称。
+- 全面更名：module path（github.com/Sakura520222/Sakura-Nexus）+ 4 处 import + cmd/sakura-nexus/ + Makefile BINARY + .env.example + 设计文档/计划中的产物与服务名（sakura-nexus.service、/usr/local/bin/sakura-nexus、docker tag、compose 服务名等）；「Sakura-Bot / v1」保留为旧项目指代（decisions/README 已加定名注记）；研究文档不动。
+- git remote origin 已指向新仓库。更名 commit 待用户 push（用户此前自行发布过旧 module path 版本）。
+- T1.1 S 冒烟仍待 TELEGRAM_API_ID/TELEGRAM_API_HASH。

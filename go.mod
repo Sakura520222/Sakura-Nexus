@@ -1,4 +1,4 @@
-module github.com/Sakura520222/Sakura-Bot
+module github.com/Sakura520222/Sakura-Nexus
 
 go 1.26
 

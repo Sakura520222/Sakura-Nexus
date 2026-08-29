@@ -83,8 +83,8 @@ SIGTERM/SIGINT 或 CORE fatal → cancel root ctx
 ### 2.1 包结构
 
 ```text
-sakura-bot/
-├── cmd/sakura-bot/main.go      # composition root：.env → App 构建 → Run。无业务逻辑
+sakura-nexus/
+├── cmd/sakura-nexus/main.go      # composition root：.env → App 构建 → Run。无业务逻辑
 ├── internal/
 │   ├── app/          # App 组合、lifecycle（service 注册/逆序关闭/supervisor）、health 聚合
 │   ├── config/       # .env 加载（struct）+ settings 中心（MySQL，scope→struct 校验+快照+变更通知）

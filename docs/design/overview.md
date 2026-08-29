@@ -1,4 +1,4 @@
-# Sakura-Bot v2 总体设计 — 总览（overview）
+# Sakura-Nexus 总体设计 — 总览（overview）
 
 - 状态：✅ 总体设计已批准并全部冻结（2026-08-29，用户批准）
 - 定位：**本文档系只做技术细化、不做新决策**；凡与 ADR 冲突，以 [ADR（docs/decisions/）](../decisions/README.md) 为准。
@@ -7,7 +7,7 @@
 ## 1. 架构总图
 
 ```text
-┌────────────────────────── sakura-bot（单二进制 / 单进程 / 多 goroutine）──────────────────────────┐
+┌────────────────────────── sakura-nexus（单二进制 / 单进程 / 多 goroutine）──────────────────────────┐
 │                                                                                                  │
 │  App（root context 统一生命周期；核心组件 fatal → 全局优雅退出 → systemd Restart=on-failure）        │
 │   ├─ TelegramSupervisor                                                                          │
