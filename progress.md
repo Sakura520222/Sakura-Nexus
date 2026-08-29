@@ -46,3 +46,11 @@
 - 01-runtime-and-components.md 成文：composition root/service 抽象、CORE/DEGRADED 两类服务与 fatal 判定、包结构与依赖方向（depguard CI 强制、接口消费者定义、反上帝对象）、P0 接口与 P1/P2 预留边界（只留签名不做假实现）、SendRequest 统一出站模型（Rich 不长平行业务 API）、channel 三规则（owner/容量/关闭责任）、.env v2 清单、settings scope 表、secrets 不回显。
 - 02-storage.md 成文：Telegram ID 规范（裸 ID + -100 转换唯一边界在 platform/botapi）、时间四件套语义、gotd_sessions（version+原子写）、messages canonical / message_revisions immutable 分离与写入协议（New/Edit/Delete）、conversations 三方身份建模、summaries+stale、Qdrant 双 named vector（dense+sparse 预留，P2 不重建 collection）、point UUIDv5 不含 revision（Edit 覆盖）、SoT 边界（vector 不回写 MySQL）、reindex_state checkpoint、v1→v2 迁移映射（含 Telethon session→gotd 转换命令）。
 - 状态：01+02 待用户审；03-07 未动；无实现代码。
+
+## 2026-08-29 · 会话 1（续）：01/02 集中修订（R2）
+
+用户复核指出必改项（注：按本会话记录为首次收到的具体修订要求，已全部执行）：
+- 01：+platform/ai（openai-go 入 depguard 禁令）；Sender 改各消费者最小接口、MessageRenderer 下沉 platform/telegram 内部；服务状态拆 DEPENDENCY_UNAVAILABLE（存活等依赖、不重启）/OWN_FATAL（退避重启）；生命周期统一「构造→注册→supervisors 启动→readiness barrier」，WebServer 为普通 CORE service；公开 /api/health 仅 status/version/uptime，细项移鉴权后 /api/system/status；删除 systemd watchdog 表述（仅 Restart=on-failure）。
+- 02：Telegram 持久化拆四表（gotd_sessions 仅认证 / telegram_update_states / telegram_channel_states / telegram_peers）；删除全部 v1 迁移内容，改「初始化与重建」（全新初始化、无导入）；+summary_cursors（水位与配置分离）；+summary_sources(summary_id,message_id,revision)（stale 追踪）；message_revisions 增 event_type（create/edit/delete），Delete 也 append 不可变事件；messages.source_type 补 bot_reply；media.file_reference 标注为可刷新缓存引用；保留策略改为 MySQL messages 永久 / Qdrant conversations 默认 180 天（只清索引不动 MySQL）。
+- overview：MySQL 列表述更新为 Telegram persistent state（session + update state + peer cache）；架构图误删的 settings 配置中心已恢复。
+- 状态：01/02 R2 版待用户快速复核；通过即冻结，再继续 03–07。

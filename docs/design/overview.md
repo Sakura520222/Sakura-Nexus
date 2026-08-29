@@ -32,8 +32,9 @@
   MySQL（Source of Truth）                     Qdrant（Derived / Disposable）   Telegram Bot API
   配置 / 频道 / 规则 / canonical message         sakura_knowledge                （HTTP，仅 Rich Message，
   + revisions / conversations / summaries        sakura_conversations            复用同一 Bot token）
-  / 调度 / 投稿 / 订阅 / 审计 / gotd session      dense（P2 +sparse/RRF）         ADR-008 专项例外）
-  / settings 配置中心                             alias + blue/green reindex
+  / 调度 / 投稿 / 订阅 / 审计 / settings 配置中心   dense（P2 +sparse/RRF）         ADR-008 专项例外）
+  / Telegram persistent state：                   alias + blue/green reindex
+    session + update state + peer cache
 ```
 
 ## 2. 核心数据流
