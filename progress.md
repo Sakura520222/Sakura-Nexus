@@ -127,3 +127,10 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - **T0.2 完成**：ci.yml（lint/test+MySQL service container/build 三 job）+ .golangci.yml（v2，depguard 领域禁 infra 规则）+ integration 骨架（env 契约测试）。本地验证：单测 PASS、本机 MySQL 凭据下集成契约 PASS、golangci-lint 0 issues。
 - 本地环境适配（用户决定，R1.2 实施期修订）：本地集成测试**不用容器**——用户提供自备 MySQL 8.0.45（test_db/test_user，仅 localhost）；compose.test.yaml 移除；凭据入 .env.test.local（gitignored）；CI 保留 service container（runner 必需）。07 §1.2 与计划 T0.2 已同步标注。
 - 环境备注：本机无 cgo/gcc → 本地 go test 不带 -race（Makefile 提供 test-local）；门禁以 CI 的 -race 为准。
+
+## 2026-08-29 · 会话 1（续）：Phase 0 完成 + T1.0
+
+- T0.3 完成（ca07ff9→amend 前历史）：.env 加载（godotenv）+ MissingEnvError 全量缺失 + 数值校验；表驱动测试全绿。
+- T1.0 完成（ab987b8，含一次 amend）：最小 domain——PeerKind（含 MarshalJSON 字符串约定/未知值拒绝）、ChatRef（裸 ID + String）、MessageRef（UNIQUE 三元组内存形态）、ChannelMessage（GroupedID/ThreadTopID/ForwardHeader 原创判定）、MediaRef（Key + 可刷新 FileRef）、Entity。
+- 过程教训（已修正）：①命令 `go test | grep` 管道掩盖失败退出码导致红测试入库，发现后修复并 amend（保证 commit 绿的门禁）；②两次手写标准库已有函数（contains/itoa），均已改用 strings/strconv。
+- 下一步 T1.1：Bot 连通（Auth().Bot+Self）+ goose runner + 0001 迁移 + sqlx 池 + gotd session storage + smoke-bot——S 冒烟需要真实 TELEGRAM_BOT_TOKEN/API_ID/API_HASH（等待用户提供 .env 或自跑冒烟）。
