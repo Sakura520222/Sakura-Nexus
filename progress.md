@@ -173,3 +173,10 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - T1.2 交付（199b329，全绿）：UserClient（含 WithUpdateHandler 选项、Raw() 仅供 auth/Manager wiring）；login-user 交互子命令（UserAuthService 状态机的 CLI presentation，验证码/2FA 终端输入）；smoke-user（免登录复用 session + 收一条真实 update 打印退出，handler 覆盖 Updates/UpdatesCombined/UpdateShort 三形态）。
 - 过程修正：tg.UpdatesClass 动态类型是容器（*tg.Updates 等，消息在 .Updates 切片），UpdateNewMessage 属 UpdateClass——按 gotd 生成代码核实后实现。
 - **待用户操作**：终端运行 go run ./cmd/sakura-nexus login-user（输入手机号/验证码/2FA；.env 可预填 USERBOT_PHONE_NUMBER）；完成后我跑 smoke-user 验证。
+
+## 2026-08-29 · 会话 1（续）：T1.2 完成（S 冒烟 PASS）
+
+- 2FA 修复链（209e8d1）：gotd SignIn 将 SESSION_PASSWORD_NEEDED 转为 sentinel auth.ErrPasswordAuthNeeded——判定改 errors.Is，用户重跑登录成功（@CherrySakura321，session account='user' 落库）。
+- smoke-user PASS：免登录复用 session + 收到真实频道 update（msg_id=138663，正文略——不复制用户频道内容）。
+- GATE-1 验证进度：Bot 连通 ✓（T1.1）、User 连通 ✓（T1.2）。剩 T1.3 状态闭环（存储×4 + Manager wiring + dispatcher + MessageRepository + smoke-recovery）打穿 GATE-1。
+- 待 push：209e8d1、0a66cd8 及本轮记录。
