@@ -1,6 +1,6 @@
 # 01 运行时与组件
 
-- 状态：📝 修订版（R2），待复核
+- 状态：✅ 已冻结（R3，2026-08-29）
 - 受约束 ADR：[001](../decisions/001-telegram-stack.md) · [002](../decisions/002-runtime-model.md) · [003](../decisions/003-webui-form.md) · [005](../decisions/005-go-libraries.md) · [008](../decisions/008-rich-message-transport.md)
 
 ## 1. 进程与生命周期
@@ -47,7 +47,18 @@ App 按启动顺序持有 `[]service`；关闭按注册**逆序**调用 `Shutdow
 | CORE fatal | CORE 服务（MySQL 连接、BotClient、WebServer）OWN_FATAL | 全局 cancel → 优雅退出（exit 1）→ systemd `Restart=on-failure` 兜底 |
 
 - 可恢复错误（断线、FloodWait、429/5xx、DB 闪断）在 service/platform 内部 retry，永不冒泡为 Run 返回。
-- 依赖恢复信号：platform 客户端暴露 `Ready() <-chan struct{}`（连接成功时发信号、断开时关闭）；消费方 Run 内 `select` 等待。
+- 依赖状态模型：platform 客户端实现**可重复连接的状态接口**，不使用一次性 close 的 ready channel（closed channel 永久可读且不可重开，无法表达「连接→断线→重连→再断线」循环）：
+
+```go
+type Availability interface {
+    IsReady() bool
+    WaitReady(ctx context.Context) error        // 阻塞至就绪或 ctx 取消
+    SubscribeState() <-chan DependencyState     // 每次状态翻转发送新值；实现方只发送，channel 由订阅方持有
+}
+// DependencyState = Ready | Unavailable（内部以 mutex/atomic + generation channel 实现）
+```
+
+  service 处于 DEPENDENCY_UNAVAILABLE 时在 Run 内 `WaitReady` / 监听 `SubscribeState`，恢复即继续，全程不重启。
 - panic：仅 supervisor 的 goroutine boundary recover → 记 stack → 等同该服务 OWN_FATAL。禁止业务代码裸 recover 继续跑。
 
 ### 1.4 优雅退出序列与退出码
@@ -226,8 +237,9 @@ SendRequest
 - channel 短清单（禁止网状自由 channel）：
   - 转发发送队列（容量 100，**阻塞背压**：转发不允许丢，满则等待/告警）
   - 日志环形缓冲→WS 推送（容量 512，**丢弃最旧**）
-  - RAG ingest 队列（P1，容量 1000，**丢弃+计数**，reindex 可补）
-  - 客户端 `Ready()` 信号（§1.3 依赖恢复）
+  - **RAG derived-index 队列**（P1，容量 1000）：仅派生索引任务可丢。New/Edit 索引任务队满时可丢并计数（`embedding_state=pending` 留痕，repair/reindex 补做）；**Delete invalidation 不允许静默丢弃**（阻塞入队或高优先级处理，Qdrant point 最终必须删除——否则已删内容仍可被检索，违反 ADR-006）
+  - 数据流边界：`Telegram event → MySQL canonical + revision（永不允许因队满丢失，先于队列写入）→ derived-index 队列 → AI augmentation / embedding / Qdrant`
+  - 客户端依赖状态：`Availability` 接口（§1.3；不使用一次性 close channel）
   - 跨组件配置事件：不走全局 channel 总线，用 settings 中心订阅回调（订阅者明确、可枚举）。
 
 ### 5.3 Telegram update 分发
@@ -278,7 +290,7 @@ SHUTDOWN_TIMEOUT_SECONDS=30
 | `system` | 语言、启动通知、维护开关 | P0 |
 | `forwarding` | show_default_footer、dedup_days、content_dedup、默认延迟区间 | P0 |
 | `logging` | level（覆盖 .env 的运行时级） | P0 |
-| `ai` | provider（base_url/model/temperature/embedding/vision 配置；**key 见 6.4**） | P1 |
+| `ai` | 同一 typed `AISettings`，字段按期启用——**P0**：base_url / api_key / rewrite_model / temperature / timeout（P0 转发 AI 改写即依赖）；**P1**：+ summary_model / embedding_model / embedding_dimension / classification；**P2**：+ vision（**key 见 6.4**） | P0 |
 | `summary` | 调度默认值、报告开关、提示词（频道级在 channel_settings） | P1 |
 | `taxonomy` | closed taxonomy 分类清单 | P1 |
 | `rag` | top_k、阈值、索引保留策略 | P1 |

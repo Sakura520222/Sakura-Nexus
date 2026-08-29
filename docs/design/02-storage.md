@@ -1,6 +1,6 @@
 # 02 存储
 
-- 状态：📝 修订版（R2），待复核
+- 状态：✅ 已冻结（R3，2026-08-29）
 - 受约束 ADR：[006](../decisions/006-rag-architecture.md) · [007](../decisions/007-scope-phases.md)
 - 本文只定**数据模型与边界**；DDL 以 goose 迁移文件为准（字段表 + 关键约束在此评审）。
 
@@ -39,36 +39,40 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | account | `VARCHAR(8)` PK | `user` / `bot` |
-| data | `MEDIUMBLOB` | gotd 序列化 session（DC、auth key 等**认证材料**） |
-| session_version | `SMALLINT` | gotd session 结构版本（防降级写坏） |
+| data | `MEDIUMBLOB` | gotd 序列化 session——**opaque `[]byte`**（gotd `session.Storage` 接口即 LoadSession/StoreSession 字节流，公开 `session.Data` 仅含 Config/DC/Addr/AuthKey/AuthKeyID/Salt，无对外版本字段；**不解析、不版本化**） |
 | updated_at | `DATETIME(6)` | |
 
-**`telegram_update_states`** — 全局 update 恢复状态（gaps recovery 的 pts/qts/date/seq/date_seq）
+**`telegram_update_states`** — 全局 update 恢复状态（gotd `updates.StateStorage` 语义按**已认证 Telegram user ID** 分区：`GetState/SetState(ctx, userID, …)`）
 
 | 字段 | 类型 |
 |---|---|
-| account `VARCHAR(8)` PK | user / bot |
+| **PK(account, user_id)** | account = 本系统逻辑槽（user/bot）；user_id = **状态身份**（该 auth session 认证的 TG user ID） |
 | pts / qts / seq `BIGINT UNSIGNED`，date `BIGINT` | |
 | updated_at `DATETIME(6)` | |
 
-**`telegram_channel_states`** — per-channel PTS（频道级增量恢复）
+**`telegram_channel_states`** — per-channel PTS（`GetChannelPts/SetChannelPts(ctx, userID, channelID, pts)`）
 
 | 字段 | 类型 |
 |---|---|
-| PK(account, channel_id) | |
+| **PK(account, user_id, channel_id)** | user_id 参与身份，理由同上 |
 | pts `BIGINT UNSIGNED`、updated_at | |
 
-**`telegram_peers`** — peer/access_hash 缓存（实体解析）
+**换号 / 重新认证**：同一 account 槽换绑真实账号或更换 Bot token 时，旧 user_id 的 update state / channel state / peer 缓存**全部失效**（新 user_id 自然建新行；启动检测 user_id 变更即清理旧行）——pts 与 access_hash 均不得跨 auth session 污染。
+
+**`telegram_peers`** — peer 持久化（对齐 gotd/contrib `storage.PeerStorage` 语义：`Add / Find / Assign / Resolve / Iterate`，`PeerKey{Kind, ID}`；Peer 保存完整 user/chat/channel 数据、版本与 metadata，支撑 short updates 处理与 username/phone 解析——**不做降级的「id→access_hash」简表**）
 
 | 字段 | 说明 |
 |---|---|
-| peer_id BIGINT UNSIGNED PK | 裸 ID |
+| **PK(account, peer_type, peer_id)** | Telegram 官方明确 user/chat/channel 的**裸 ID 数值空间重叠**，身份必须含 peer_type；access_hash **不可跨 auth session 复用**，必须含 account |
 | peer_type `VARCHAR(8)` | user / chat / channel |
-| access_hash `BIGINT` | API 访问凭据（可刷新） |
-| username / title VARCHAR | 快照（辅助解析与展示） |
+| peer_id `BIGINT UNSIGNED` | 裸 ID |
+| data `MEDIUMBLOB` | gotd/contrib `storage.Peer` 序列化（access_hash 在其内；basic chat 本就无 access hash，故无独立非空列） |
+| username `VARCHAR(64)` NULL / title `VARCHAR(255)` | 快照（展示 / 辅助索引） |
 | updated_at | |
 
-职责边界：**session blob 只含认证材料**；update 恢复状态与 peer 缓存独立持久化（gotd 各自的 storage 接口分别映射到上述表）。写入均为独立小事务、原子 REPLACE。
+是否增设 `telegram_peer_aliases`（username/phone → peer 的 `Assign/Resolve` 映射表）由 03 的 resolver 实现定夺（若 contrib 内存层可完全承担则不加表）。
+
+职责边界：**session blob 只含认证材料**且视为 opaque 字节（不解析、不版本化——未来若自行包 envelope 再定义本项目 `format_version`）；update 恢复状态与 peer 缓存独立持久化（gotd 各自的 storage 接口分别映射到上述表）。写入均为独立小事务的 **upsert（`INSERT … ON DUPLICATE KEY UPDATE`）**，不用 `REPLACE`（其 delete+insert 语义对状态/缓存写入无益且浪费）。
 
 ### 2.2 频道与转发（P0）
 
@@ -156,7 +160,7 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 **写入协议**（引擎内单一入口执行）：
 - New：messages INSERT（revision 0）+ revisions INSERT(rev 0, create)。
 - Edit：messages UPDATE（text/media/edited_at/current_revision+1）+ revisions INSERT(新 rev, edit)。
-- Delete：messages UPDATE `deleted_at = now()`（canonical 软删）+ **revisions INSERT(新 rev, delete)**（不可变删除事件）+ Qdrant 删除 active point。删除内容退出普通知识检索；delete revision 本身可支撑时间线/审计需求（ADR-006）。
+- Delete：messages UPDATE `deleted_at = now()` **并 `current_revision += 1`**（否则 `summary_sources.revision` 与 `messages.current_revision` 的比对检测不到 Delete，stale 判定失效）+ **revisions INSERT(新 rev, delete)**（不可变删除事件）+ Qdrant 删除 active point（invalidation 任务不允许静默丢弃，见 01 §5.2）。删除内容退出普通知识检索；delete revision 本身可支撑时间线/审计需求（ADR-006）。
 
 ### 2.4 会话（P1 建表，P2 使用——三方身份显式建模）
 

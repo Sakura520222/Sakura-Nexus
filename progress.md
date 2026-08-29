@@ -54,3 +54,11 @@
 - 02：Telegram 持久化拆四表（gotd_sessions 仅认证 / telegram_update_states / telegram_channel_states / telegram_peers）；删除全部 v1 迁移内容，改「初始化与重建」（全新初始化、无导入）；+summary_cursors（水位与配置分离）；+summary_sources(summary_id,message_id,revision)（stale 追踪）；message_revisions 增 event_type（create/edit/delete），Delete 也 append 不可变事件；messages.source_type 补 bot_reply；media.file_reference 标注为可刷新缓存引用；保留策略改为 MySQL messages 永久 / Qdrant conversations 默认 180 天（只清索引不动 MySQL）。
 - overview：MySQL 列表述更新为 Telegram persistent state（session + update state + peer cache）；架构图误删的 settings 配置中心已恢复。
 - 状态：01/02 R2 版待用户快速复核；通过即冻结，再继续 03–07。
+
+## 2026-08-29 · 会话 1（续）：01/02 冻结（R3）+ 03–07 成文
+
+R3 修订（用户复核的 5+2 项，全部落实）：
+- 01：Ready channel 改 Availability 接口（IsReady/WaitReady/SubscribeState，可重复连接循环）；settings.ai 从 P0 起存在（AISettings 字段按期启用：P0 base_url/api_key/rewrite_model/temperature/timeout）；RAG 队列改名 derived-index queue（canonical 先落库不可丢；Delete invalidation 禁止静默丢弃）。
+- 02：telegram_update_states/telegram_channel_states 增 user_id 身份分区（gotd StateStorage 语义）+ 换号清旧；telegram_peers 改 PK(account, peer_type, peer_id) + storage.Peer 序列化（对齐 contrib PeerStorage，ID 空间重叠/access_hash 不跨 session）；gotd_sessions 删 session_version（opaque blob 不解析）；写语义 REPLACE→INSERT…ON DUPLICATE KEY UPDATE；Delete 明确 current_revision += 1。
+- 01/02 标记冻结。
+按用户预授权继续成文 03–07（首次成文，待审）：03 gotd 集成/状态映射/相册算法/8.x Rich Rendering/转发引擎；04 页面/API/JWT/WS/Harness；05 AIProvider 矩阵/AIResponse/ingest/检索管线/reindex/分类/会话；06 systemd+docker+compose(profile full)/备份/可观测/安全/资源预算；07 测试策略(golden)/CI/里程碑验收/术语与功能对照。

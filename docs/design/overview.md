@@ -71,13 +71,13 @@ ADR-008 的「`AIProvider` 只产出通用 `AIResponse`、Rich Markdown 由 pres
 
 | 文件 | 覆盖（原 16 章映射） | 受约束 ADR | 状态 |
 |---|---|---|---|
-| [01-runtime-and-components.md](01-runtime-and-components.md) | 3 进程生命周期 · 4 代码组织与接口边界（含 Sender/MessageRenderer 出站抽象）· 7 配置体系（.env v2、settings scope、加载与热更） | 001 002 003 005 008 | 待成文 |
-| [02-storage.md](02-storage.md) | 5 MySQL schema v2 · 6 Qdrant 设计 | 006 007 | 待成文 |
-| [03-telegram-and-forwarding.md](03-telegram-and-forwarding.md) | 8 Telegram 集成（含 8.x Bot 出站传输与 Rich Message Rendering）· 9 转发引擎 | 001 002 008 | 待成文 |
-| [04-webui-and-api.md](04-webui-and-api.md) | 10 WebUI 与 API（页面/路由/DTO/JWT/WebSocket/RAG Query Harness） | 003 004 | 待成文 |
-| [05-ai-and-rag.md](05-ai-and-rag.md) | 11 AI Provider（含 AI 输出契约）· RAG 管线细化 | 006 007 008 | 待成文 |
-| [06-deployment-security-observability.md](06-deployment-security-observability.md) | 12 部署 · 13 可观测性与安全 | 002 005 006 | 待成文 |
-| [07-testing-milestones-migration.md](07-testing-milestones-migration.md) | 14 测试与 CI · 15 里程碑对照 · 16 附录（术语/迁移对照） | 007 | 待成文 |
+| [01-runtime-and-components.md](01-runtime-and-components.md) | 3 进程生命周期 · 4 代码组织与接口边界（含 Sender 出站抽象）· 7 配置体系（.env v2、settings scope、加载与热更） | 001 002 003 005 008 | ✅ 已冻结（R3） |
+| [02-storage.md](02-storage.md) | 5 MySQL schema v2 · 6 Qdrant 设计 | 006 007 | ✅ 已冻结（R3） |
+| [03-telegram-and-forwarding.md](03-telegram-and-forwarding.md) | 8 Telegram 集成（含 8.x Bot 出站传输与 Rich Message Rendering）· 9 转发引擎 | 001 002 008 | 📝 待审 |
+| [04-webui-and-api.md](04-webui-and-api.md) | 10 WebUI 与 API（页面/路由/DTO/JWT/WebSocket/RAG Query Harness） | 003 004 | 📝 待审 |
+| [05-ai-and-rag.md](05-ai-and-rag.md) | 11 AI Provider（含 AI 输出契约）· RAG 管线细化 | 006 007 008 | 📝 待审 |
+| [06-deployment-security-observability.md](06-deployment-security-observability.md) | 12 部署 · 13 可观测性与安全 | 002 005 006 | 📝 待审 |
+| [07-testing-milestones-migration.md](07-testing-milestones-migration.md) | 14 测试与 CI · 15 里程碑对照 · 16 附录（术语/功能对照） | 007 | 📝 待审 |
 
 原 16 章中的第 1 章（文档定位）与第 2 章（架构总图）由本 overview 承担。
 
