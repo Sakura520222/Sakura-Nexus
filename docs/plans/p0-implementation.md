@@ -11,6 +11,8 @@
 
 **不做（即使设计已冻结）**：Qdrant、Summary、Dense RAG、讨论会话、投稿/投票——P0 不创建 `internal/summary`、`internal/rag`、`internal/conversation`、`internal/platform/qdrant` 包，不建 P1/P2 业务表。
 
+**全新实现铁律（用户重申，2026-08-29）**：**不从旧 Sakura-Bot / TG-Forwarder 迁移任何内容**——不迁移数据（02 §5：全新初始化，无导入工具）、不复制代码、不逐行翻译旧实现。旧项目的全部价值已固化在 [调研报告](../research/) 中，仅作为**业务需求与语义参考**；v2 实现完全依据已冻结的 ADR 与总体设计（01–07），从 `T0.1` 的第一行 Go 开始全新编写。
+
 ## 2. 总原则
 
 1. **风险前置**：最大工程风险 = gotd 双客户端稳定性 + 持久状态闭环。**第 5 个任务（T1.1）即首次连接真实 Telegram**，位于任何转发引擎/WebUI/业务代码之前；GATE-1 失败 → 停止实施，回设计层重估。
