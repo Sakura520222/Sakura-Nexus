@@ -25,3 +25,10 @@
 - 六项决策分类写入 docs/decisions/（ADR 风格）；废弃并删除 Python 版设计草稿与 P0 计划。
 - 下一步：第七问范围分级 → 总体设计文档（含 gotd session 入 MySQL 方案、.env v2）→ Go 版实施计划。
 - 注意：docs/telegram-bot-api-10.2-rich-markdown-zh.md 为用户自行放入的文件，未纳入提交。
+
+## 2026-08-29 · 会话 1（续）：第六项澄清 + 第七项拍板
+
+- ADR-006 两处措辞级修订：BM25 sparse 实施期实测三路径（Qdrant 原生 server-side sparse inference 优先 / 应用侧 fallback / provider sparse 第三路），接口不绑定生成方式；DedicatedReranker 明确为可选检索扩展适配器（非核心 AIProvider）。
+- 三条 Architecture Invariants 正式写入 ADR-006；blue/green + alias reindex 正式接受。
+- ADR-007 拍板：P0=A+B+C（production vertical slice）；P1=D+F+RAG Query Harness；P2=E+G；强制「分期只裁功能不裁架构」（Retriever/Reranker/VisionProcessor/QueryAnalyzer/MemoryStore 第一天留接口边界）。
+- 目标架构（001-006）冻结。下一步：总体设计文档结构给用户审 → 成文 → Go 版 P0 实施计划 → 确认后才动代码。

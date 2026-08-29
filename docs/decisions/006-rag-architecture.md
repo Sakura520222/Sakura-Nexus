@@ -26,6 +26,12 @@
 
 **MySQL 是事实真相源，Qdrant 是可以随时重建的索引。** Qdrant 丢失不造成数据丢失（清空 → 遍历 MySQL active messages → 复用已有分类 → 重新 embedding → 重建）。组件实时协作仍走 Go channel（ADR-002 的「MySQL 禁止当 IPC」不冲突）。
 
+### Architecture Invariants（不可破坏；为省代码绕过即视为架构违规）
+
+1. `MySQL = Source of Truth`；`Qdrant = Derived / Disposable Index`
+2. `Conversation Recording ≠ AI Reply Triggering`（记录与触发分离）
+3. 检索组装管线：`Retrieve by Relevance → Rerank → Select → Order by Time → Build Context`
+
 ### 存储分层与双 collection
 
 | 层 | 内容 | Scope |
@@ -93,6 +99,8 @@ Reranker interface
 └── DedicatedReranker    （未来接 Jina/Cohere/SiliconFlow 的 /rerank）
 ```
 
+**边界澄清**：核心 AI Provider 矩阵为 Embedding / Chat+Agent / Vision / Classification / Summary / Query Analyzer / LLM Reranker，**全部经 OpenAI-compatible API**（已拍板）。`DedicatedReranker` 属于**可选检索扩展适配器**，不是核心 `AIProvider` 的组成部分（Jina/Cohere/SiliconFlow 专用 rerank API 未必遵循 OpenAI 协议）。第一期只用 OpenAI-compatible Chat/Responses 做 listwise rerank，不引入第二套 AI API 协议。
+
 ### AI Provider 统一
 
 全部 AI 能力走一套 OpenAI-compatible provider（openai-go + WithBaseURL）：embedding（`/v1/embeddings`）、classification / summary / query analysis / rerank（Chat/Responses）、vision（`input_image`）。
@@ -128,8 +136,20 @@ channel post 233 → discussion top message 18527 → reply_to_top_id = 18527 �
 ### 实施补充约束（拍板时追加）
 
 1. **Qdrant 是部署新增外部服务**（docker-compose 服务或裸机二进制 + systemd），部署文档须覆盖两种形态。
-2. **BM25 sparse 双路径**：Qdrant 内置 BM25 文本索引 or 外部 sparse embedding（BGE-M3 lexical 等，视 provider OpenAI 兼容端点输出而定）；实施第一周用真实 Qdrant 实测定案，文档记录 fallback。
-3. **reindex 是正式 worker**（非一次性脚本）：限速（embedding 配额）、断点续传、进度上报；重建用「新 collection + alias 原子切换」，避免重建期检索空窗。
+2. **BM25 sparse 路径在实施期实测决定**：优先评估 Qdrant 原生 BM25 / server-side sparse inference（Qdrant 全文排名以 sparse vector 为基础，1.15.2 起可直接在服务端从输入文本生成 BM25 sparse embedding）；fallback 为应用侧生成 sparse vectors；若 OpenAI-compatible provider 后续提供高质量 lexical/sparse embedding，也可作为第三种实现。**检索层接口不得绑定具体 sparse 生成方式。**
+3. **reindex 是正式 worker + blue/green 版本化重建**（非一次性脚本、非原地清空）：
+
+```text
+sakura_knowledge_v3    ← 当前 alias
+        │ 后台构建（checkpoint / rate limit / retry / progress / validation）
+        ▼
+sakura_knowledge_v4 ── atomic alias switch ──▶ sakura_knowledge → v4
+        │ 验证稳定
+        ▼
+清理 v3
+```
+
+   embedding API 限流、服务器重启、某批消息失败均不影响线上现有检索。
 4. 架构拍板 ≠ 全量进第一期实施；分期切分在范围分级（第七问）确定。
 
 ## 备选与否决理由
@@ -141,4 +161,4 @@ channel post 233 → discussion top message 18527 → reply_to_top_id = 18527 �
 
 ## 来源
 
-[RAGFlow](https://github.com/infiniflow/ragflow) · [RAGFlow ingestion extractor](https://github.com/infiniflow/ragflow/blob/main/internal/ingestion/component/schema/extractor.go) · [RAGFlow AutoKeyword/AutoQuestion](https://github.com/infiniflow/ragflow/blob/main/docs/guides/dataset/advanced/autokeyword_autoquestion.mdx) · [Dify Knowledge Retrieval](https://github.com/langgenius/dify-docs/blob/main/en/cloud/use-dify/nodes/knowledge-retrieval.mdx) · [Open WebUI RAG](https://docs.openwebui.com/features/chat-conversations/rag/) · [Qdrant Hybrid Queries](https://qdrant.tech/documentation/search/hybrid-queries/) · [pgvector](https://github.com/pgvector/pgvector) · [Elastic hybrid search](https://www.elastic.co/docs/solutions/search/hybrid-search) · [OpenAI 平台文档](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint) · [Telegram: Discussion groups](https://core.telegram.org/api/discussion) · [Telegram: Threads](https://core.telegram.org/api/threads) · [messages.getDiscussionMessage](https://core.telegram.org/method/messages.getDiscussionMessage) · [Mem0 架构](https://github.com/mem0ai/mem0/blob/main/skills/mem0/references/architecture.md) · [qdrant/go-client releases](https://github.com/qdrant/go-client/releases)
+[Qdrant Full-Text Search（BM25/sparse）](https://qdrant.tech/documentation/search/text-search/full-text-search/) · [Qdrant Sparse Retrieval Demo](https://qdrant.tech/course/essentials/day-3/sparse-retrieval-demo/) · [RAGFlow](https://github.com/infiniflow/ragflow) · [RAGFlow ingestion extractor](https://github.com/infiniflow/ragflow/blob/main/internal/ingestion/component/schema/extractor.go) · [RAGFlow AutoKeyword/AutoQuestion](https://github.com/infiniflow/ragflow/blob/main/docs/guides/dataset/advanced/autokeyword_autoquestion.mdx) · [Dify Knowledge Retrieval](https://github.com/langgenius/dify-docs/blob/main/en/cloud/use-dify/nodes/knowledge-retrieval.mdx) · [Open WebUI RAG](https://docs.openwebui.com/features/chat-conversations/rag/) · [Qdrant Hybrid Queries](https://qdrant.tech/documentation/search/hybrid-queries/) · [pgvector](https://github.com/pgvector/pgvector) · [Elastic hybrid search](https://www.elastic.co/docs/solutions/search/hybrid-search) · [OpenAI 平台文档](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint) · [Telegram: Discussion groups](https://core.telegram.org/api/discussion) · [Telegram: Threads](https://core.telegram.org/api/threads) · [messages.getDiscussionMessage](https://core.telegram.org/method/messages.getDiscussionMessage) · [Mem0 架构](https://github.com/mem0ai/mem0/blob/main/skills/mem0/references/architecture.md) · [qdrant/go-client releases](https://github.com/qdrant/go-client/releases)
