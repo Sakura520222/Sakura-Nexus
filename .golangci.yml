@@ -36,3 +36,7 @@ linters:
           deny:
             - pkg: net/http
               desc: HTTP 属 webapi/platform 层；领域包不得直接使用 net/http
+
+formatters:
+  enable:
+    - gofmt

@@ -123,9 +123,9 @@ func TestAPIIDZeroIsMissing(t *testing.T) {
 
 func TestInvalidNumeric(t *testing.T) {
 	cases := map[string]string{
-		"MYSQL_PORT":        "abc",
-		"TELEGRAM_API_ID":   "not-a-number",
-		"WEBUI_PORT":        "",
+		"MYSQL_PORT":      "abc",
+		"TELEGRAM_API_ID": "not-a-number",
+		"WEBUI_PORT":      "",
 	}
 	// WEBUI_PORT 空串走默认，不非法——单独覆盖
 	setFullEnv(t)

@@ -47,8 +47,8 @@ type ForwardHeader struct {
 // 领域与 repository 不接触 gotd 类型（P0 Plan R1 必改 2）。
 type ChannelMessage struct {
 	Ref               MessageRef     `json:"ref"`
-	GroupedID         int64          `json:"groupedId,omitempty"`     // 相册聚合键（0=非相册）
-	ThreadTopID       int64          `json:"threadTopId,omitempty"`   // 讨论线程顶层消息（非线程=自身；0=未知）
+	GroupedID         int64          `json:"groupedId,omitempty"`   // 相册聚合键（0=非相册）
+	ThreadTopID       int64          `json:"threadTopId,omitempty"` // 讨论线程顶层消息（非线程=自身；0=未知）
 	SenderUserID      int64          `json:"senderUserId,omitempty"`
 	SenderUsername    string         `json:"senderUsername,omitempty"`
 	SenderDisplayName string         `json:"senderDisplayName,omitempty"`
