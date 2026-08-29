@@ -8,7 +8,6 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
-	tgerr "github.com/gotd/td/tgerr"
 )
 
 // ErrPasswordNeeded 表示验证码通过但账号开启了两步验证，需要调用 SubmitPassword。
@@ -61,7 +60,8 @@ func (u *UserAuth) SubmitCode(ctx context.Context, code string) error {
 		return errors.New("尚未调用 StartLogin")
 	}
 	if _, err := u.client.Auth().SignIn(ctx, u.phone, code, u.codeHash); err != nil {
-		if tgerr.Is(err, "SESSION_PASSWORD_NEEDED") {
+		// gotd 将 SESSION_PASSWORD_NEEDED 转为专用 sentinel auth.ErrPasswordAuthNeeded
+		if errors.Is(err, auth.ErrPasswordAuthNeeded) {
 			u.password = true
 			return ErrPasswordNeeded
 		}
