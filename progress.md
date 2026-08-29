@@ -158,3 +158,11 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
   - 第 2 次（重跑）：免登录复用 session、同身份验证通过。
   - 环境：本地 MySQL 8.0.45 sakura_bot 库；用户填入 TELEGRAM_API_ID/HASH。
 - T1.1 完成度：U/I/S 全绿。剩余 GATE-1 内容在 T1.2/T1.3（User 连通、状态闭环）。
+
+## 2026-08-29 · 会话 1（续）：修复 CI 红（07239fe lint job）
+
+- 用户报告 CI 红（gofmt 步骤）。本地以 core.autocrlf=false 干净 clone 复现定位。
+- 根因 1：env_test.go / message.go 两处 gofmt 格式偏差——本地盲区（.golangci.yml 原配置未含 gofmt formatter，且 T0.2 后未再手跑 gofmt）。修复：gofmt -w；gofmt 入 formatters 门禁。
+- 根因 2（修复过程中暴露）：.golangci.yml 第二次 Edit 把 formatters 段插在中间，settings 被挤到 formatters 下 → depguard 配置失联 → depguard 默认 Main 规则（仅标准库）拦截 17 处 import。修复：settings 归位；config verify 通过；**以 guard_probe 临时违规文件主动验证 no-infra-in-domain 规则真实生效**（防再次静默失效）。
+- CI 模拟（干净 clone）：gofmt/vet/build 全绿；本地 lint 0 issues + build+test OK。已提交待 push。
+- 附带：T1.2 的 UserAuth 状态机（auth.go，基于 gotd 真实 API：SendCode→SignIn(ctx,phone,code,codeHash)→Password；tgerr SESSION_PASSWORD_NEEDED 判定）随本 commit 入库；T1.2 剩余：login-user CLI 子命令 + smoke-user。
