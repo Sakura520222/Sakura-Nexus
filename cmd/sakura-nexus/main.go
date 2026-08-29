@@ -7,10 +7,19 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"runtime/debug"
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "login-user":
+			runLoginUser(os.Args[2:])
+			return
+		}
+	}
+
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -26,4 +35,10 @@ func versionString() string {
 		return info.Main.Version
 	}
 	return "devel"
+}
+
+// fail 打印错误并以退出码 1 结束（login-user 等子命令共用）。
+func fail(format string, a ...any) {
+	fmt.Printf("✗ "+format+"\n", a...)
+	os.Exit(1)
 }
