@@ -1,5 +1,9 @@
 # Telegram Bot API 10.2：Rich Markdown 完整格式支持
 
+> **来源**：Telegram Bot API 官方文档 · **对应版本**：10.2
+> **用途**：项目内部中文参考快照（ADR-008 与 Rich renderer golden tests 的规格依据），**非规范性来源**
+> **规则冲突时**：以 Telegram 官方最新文档 + ADR-008 为准
+
 > 抓取时间：2026-07-17（Asia/Shanghai）  
 > 官方更新：Bot API 10.1 于 2026-06-11 引入 Rich Messages；10.2 于 2026-07-14 补充媒体声明、语音消息与输入块。  
 > 官方文档：[Rich Message Formatting Options](https://core.telegram.org/bots/api#rich-message-formatting-options) · [Bot Features](https://core.telegram.org/bots/features#rich-messages)

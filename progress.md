@@ -92,3 +92,16 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
   - 每任务定义交付物/验证（U/I/S 三类）/依赖；测试门禁（gofmt/golangci-lint+depguard/-race/集成）；commit 粒度 1–3 个。
   - 实施中设计不可行 → 停止回报，修订设计获确认后继续，不静默偏离。
 - 当前状态：**实施计划待用户批准，零实现代码**。
+
+## 2026-08-29 · 会话 1（续）：P0 计划 R1 cleanup
+
+用户审核 P0 计划：整体方案通过，4 项必改 + Gate 加强 + 前移/命名修正，全部落实为 R1：
+- ①0001_telegram_foundation.sql 含 messages+message_revisions（GATE-1 基座）；T1.3 正式实现 MessageRepository/canonical writer（T2.4 只补其余 5 个 repo）。
+- ②最小 domain（ChatRef/PeerKind/MessageRef/ChannelMessage/MediaRef/Entity）前移为 T1.0；T3.1 改为 outbound domain 补全。
+- ③CI 渐进启用：T0.2 仅 Go + .golangci.yml/depguard + MySQL integration infra；T5.4 追加前端 job；T6.2 追加 docker job；不用 if:exists 假绿。
+- ④contiguous cursor 语义冻结为引擎不变量（§6）：terminal=filtered/dedup/success，transient failure 不得越过推进；T3.5/T3.9 验证含恢复用例；永久失败有限重试后标 terminal 防卡死。
+- Gate 加强：T1.1 用 Auth().Bot+Self()（不写 getMe）；T1.3 完整 Manager wiring（UpdateHandler+UpdateHook+AffectedHook+StateStorage）。
+- T2.0 lifecycle 前移（GATE-1 后、业务实现前）；T5.1 改为接线收口。
+- 小修：canonical module path github.com/Sakura520222/Sakura-Bot；CLI/WebUI 共用 UserAuthService；Gate 命名统一（无 1a/1b/2b）；规模更正为 32 任务+4 Gate+1 检查点。
+- Rich 参考文档保持入库并补头注（来源/版本/用途/冲突时以官方+ADR-008 为准）。
+- 状态：P0 计划 R1 待用户核对 diff；通过即批准开工（T0.1）。零实现代码。
