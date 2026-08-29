@@ -22,6 +22,11 @@ func WithUpdateHandler(h telegram.UpdateHandler) UserOption {
 	return func(o *telegram.Options) { o.UpdateHandler = h }
 }
 
+// WithMiddleware 附加客户端中间件（T1.3：updhook.UpdateHook/AffectedHook）。
+func WithMiddleware(mw ...telegram.Middleware) UserOption {
+	return func(o *telegram.Options) { o.Middlewares = append(o.Middlewares, mw...) }
+}
+
 // NewUserClient 构造 User 客户端（Device 用 gotd 固定默认值，03 §1.1）。
 func NewUserClient(apiID int, apiHash string, storage telegram.SessionStorage, opts ...UserOption) *UserClient {
 	o := telegram.Options{SessionStorage: storage}

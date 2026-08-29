@@ -24,6 +24,7 @@ require (
 	github.com/go-faster/xor v1.0.0 // indirect
 	github.com/go-faster/yaml v0.4.6 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gotd/contrib v0.25.0 // indirect
 	github.com/gotd/ige v0.3.0 // indirect
 	github.com/gotd/log v0.1.0 // indirect
 	github.com/gotd/neo v0.1.5 // indirect
