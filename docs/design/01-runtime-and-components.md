@@ -1,6 +1,6 @@
 # 01 运行时与组件
 
-- 状态：✅ 已冻结（R3，2026-08-29）
+- 状态：✅ 已冻结（R3.1，2026-08-29）
 - 受约束 ADR：[001](../decisions/001-telegram-stack.md) · [002](../decisions/002-runtime-model.md) · [003](../decisions/003-webui-form.md) · [005](../decisions/005-go-libraries.md) · [008](../decisions/008-rich-message-transport.md)
 
 ## 1. 进程与生命周期
@@ -69,7 +69,7 @@ SIGTERM/SIGINT 或 CORE fatal → cancel root ctx
 → 逆序 Shutdown（drain 在途任务；总预算 SHUTDOWN_TIMEOUT_SECONDS，默认 30s）
 → UserClient / BotClient close（session 与 update state 落库，见 02 §2.1）
 → MySQL 池关闭
-→ exit：0 正常 / 1 CORE fatal / 2 配置缺失
+→ exit：0 正常 / 1 CORE fatal / 2 配置缺失 / **75 重启请求**（WebUI restart：优雅退出后以 75 退出——非零退出码使 systemd `Restart=on-failure` 与 docker `unless-stopped` 均会拉起新进程）
 ```
 
 ### 1.5 health endpoint
@@ -188,17 +188,32 @@ type MemoryStore interface { /* P2 定义 */ }
 ### 4.1 统一模型（不为 Rich Message 长出平行业务 API）
 
 ```go
+// domain：Telegram 通用 chat 引用（R3.1）
+// 裸 ID 数值空间在 user/chat/channel 间重叠，任何 chat 引用必须携带 kind（Bot API 正负/-100 编码的本质即补充类型信息）
+type PeerKind uint8
+
+const (
+    PeerUser PeerKind = iota
+    PeerChat           // basic group
+    PeerChannel        // channel 与 supergroup（MTProto 同类）
+)
+
+type ChatRef struct {
+    Kind PeerKind
+    ID   int64 // MTProto 裸 ID（正数）
+}
+
 // domain 承载数据；各消费者以自己的最小 Sender 接口引用
 type SendRequest struct {
-    ChatID   int64
-    Style    SendStyle          // Auto（默认）/ Plain / Rich
-    Content  *MessageContent    // 结构化内容（AI 输出：text + 可选 media 引用 + metadata）
-    Text     string             // Plain 直发文本
-    Entities []Entity           // 可选：原 entities 透传（转发复制语义）
-    Media    []MediaRef         // 本地文件或媒体引用
+    Chat     ChatRef           // R3.1：kind + raw id
+    Style    SendStyle         // Auto（默认）/ Plain / Rich
+    Content  *MessageContent   // 结构化内容（AI 输出：text + 可选 media 引用 + metadata）
+    Text     string            // Plain 直发文本
+    Entities []Entity          // 可选：原 entities 透传（转发复制语义）
+    Media    []MediaRef        // 本地文件或媒体引用
     Caption  string
-    ReplyTo  int64              // 回复目标消息
-    Markup   *Keyboard          // inline keyboard
+    ReplyTo  int64             // 回复目标消息
+    Markup   *Keyboard         // inline keyboard
     Silent   bool
 }
 ```
@@ -273,7 +288,7 @@ QDRANT_URL=
 QDRANT_API_KEY=
 
 # ---- WebUI（必需）----
-WEBUI_HOST=0.0.0.0
+WEBUI_HOST=127.0.0.1   # 裸机默认仅本机（安全默认）；Docker 部署经 compose override 改 0.0.0.0
 WEBUI_PORT=8080
 WEBUI_USERNAME=admin
 WEBUI_PASSWORD=
@@ -287,12 +302,12 @@ SHUTDOWN_TIMEOUT_SECONDS=30
 
 | scope | 内容（Go struct 定义字段，编译期 schema，写入前校验） | 期 |
 |---|---|---|
-| `system` | 语言、启动通知、维护开关 | P0 |
+| `system` | 语言、启动通知、维护开关、**telegram_admin_ids**（Bot 管理命令白名单；空 = Telegram 管理命令全部禁用，用户聊天/问答不受影响；不设独立 admins 表） | P0 |
 | `forwarding` | show_default_footer、dedup_days、content_dedup、默认延迟区间 | P0 |
 | `logging` | level（覆盖 .env 的运行时级） | P0 |
-| `ai` | 同一 typed `AISettings`，字段按期启用——**P0**：base_url / api_key / rewrite_model / temperature / timeout（P0 转发 AI 改写即依赖）；**P1**：+ summary_model / embedding_model / embedding_dimension / classification；**P2**：+ vision（**key 见 6.4**） | P0 |
+| `ai` | 同一 typed `AISettings`，字段按期启用——**P0**：base_url / api_key / rewrite_model / temperature / timeout（P0 转发 AI 改写即依赖）；**P1**：+ summary_model / embedding_model / embedding_dimension；**P2**：+ classification / vision（与 ADR-007、05 §1 对齐；**key 见 6.4**） | P0 |
 | `summary` | 调度默认值、报告开关、提示词（频道级在 channel_settings） | P1 |
-| `taxonomy` | closed taxonomy 分类清单 | P1 |
+| `taxonomy` | closed taxonomy 分类清单 | P2 |
 | `rag` | top_k、阈值、索引保留策略 | P1 |
 | `qa` | 配额、人格 | P2 |
 

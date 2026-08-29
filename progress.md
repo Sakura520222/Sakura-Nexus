@@ -62,3 +62,12 @@ R3 修订（用户复核的 5+2 项，全部落实）：
 - 02：telegram_update_states/telegram_channel_states 增 user_id 身份分区（gotd StateStorage 语义）+ 换号清旧；telegram_peers 改 PK(account, peer_type, peer_id) + storage.Peer 序列化（对齐 contrib PeerStorage，ID 空间重叠/access_hash 不跨 session）；gotd_sessions 删 session_version（opaque blob 不解析）；写语义 REPLACE→INSERT…ON DUPLICATE KEY UPDATE；Delete 明确 current_revision += 1。
 - 01/02 标记冻结。
 按用户预授权继续成文 03–07（首次成文，待审）：03 gotd 集成/状态映射/相册算法/8.x Rich Rendering/转发引擎；04 页面/API/JWT/WS/Harness；05 AIProvider 矩阵/AIResponse/ingest/检索管线/reindex/分类/会话；06 systemd+docker+compose(profile full)/备份/可观测/安全/资源预算；07 测试策略(golden)/CI/里程碑验收/术语与功能对照。
+
+## 2026-08-29 · 会话 1（续）：03–07 复核意见落实（R3.1 技术修订）
+
+ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
+- 四大完整性问题：①ChatRef（PeerKind+裸 ID）贯彻 SendRequest/messages（chat_type 入 UNIQUE 键）/Bot API 三态编码边界；②RAG 索引生命周期=MySQL durable state（embedding_state 五态含 delete_pending 事务化、summaries.index_state 修 crash window、media_analyses/user_memories SoT 新表）→repairable derived job（repair 统一扫描收敛）→Qdrant 最终一致；③每类 Qdrant 文档皆有 MySQL SoT（reindex checkpoint 改 per-kind JSON）；④鉴权/部署真实语义（JWT→server-side opaque session+Cookie；gofmt/-race/compose 双文件 config 校验；HEALTHCHECK 子命令；exit 75 重启语义；systemd 不硬绑服务名；admins→settings.system.telegram_admin_ids）。
+- 03：updates.Manager（非 Engine）+OnTooLong→recovery_required→GetHistory 定向补抓走同一管线；floodwait.Waiter 统一（超限=failed+可补发，非丢弃）；MySQL 仅幂等操作可 retry；相册真动态窗口（quiet 400ms 重置+hard 2s+集满 10）+聚合过滤+全成员 dedup；telegram_peer_aliases 正式落地；Rich lazy first-use detection。
+- 05：AIProvider 补 Answer 能力；Context Builder 顺序修正（预算裁剪在时间排序之前）；/rag/answer 只传 IDs 后端重建；P2 补 User Memory 层与多模态回答链（原图重取→multimodal，不可得→persisted description）。
+- 07：更名 07-testing-milestones-reference.md；integration 必跑策略（P0 MySQL/P1+Qdrant，testcontainers 无需 TG secret）；P0/P2 验收新增 4 个用例（gap-too-long 恢复、相册全成员 dedup、User Memory、讨论群图片多模态）。
+- 状态：全部文档 R3.1，待用户快速一致性复核；通过后批准总体设计 → Go P0 实施计划（计划确认前零实现代码）。

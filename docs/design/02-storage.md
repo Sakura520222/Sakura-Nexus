@@ -1,6 +1,6 @@
 # 02 存储
 
-- 状态：✅ 已冻结（R3，2026-08-29）
+- 状态：✅ 已冻结（R3.1，2026-08-29）
 - 受约束 ADR：[006](../decisions/006-rag-architecture.md) · [007](../decisions/007-scope-phases.md)
 - 本文只定**数据模型与边界**；DDL 以 goose 迁移文件为准（字段表 + 关键约束在此评审）。
 
@@ -12,7 +12,8 @@
 |---|---|
 | 存储形态 | **一律存 MTProto 裸 ID（正数）**：`channel_id` = `tg.Channel.ID`、`user_id` = `tg.User.ID`、`message_id` = `tg.Message.ID` |
 | SQL 类型 | 全部 `BIGINT UNSIGNED`（Telegram ID 空间远小于 2^63；驱动层统一按有符号扫描，应用层保证非负） |
-| `-100` 转换边界 | Bot API 通道（ADR-008）出站时由 **platform/botapi 唯一负责**加 `-100` mark；库内任何表不出现带 mark 的 ID |
+| Bot API 编码边界 | Bot API 通道（ADR-008）出站时由 **platform/botapi 唯一负责**按 PeerKind 编码：user→`+ID`、chat(basic group)→`-ID`、channel/supergroup→`-(1000000000000+ID)`；库内任何表不出现编码后 ID |
+| **ChatRef 原则（R3.1）** | 裸 ID 数值空间在 user/chat/channel 间**重叠**（Telegram 官方 peer 语义），因此**所有跨表 chat 引用必须携带类型**：消息层为 `chat_type` 列、内存模型为 `domain.ChatRef{Kind, ID}`（01 §4.1）；`@username` 仅作辅助解析列 |
 | `@username` | 永不作主键/外键；仅 `channels.username`、`forward_rules.source_username` 作为**解析辅助列**（可变，随时可能被改名/回收） |
 
 ### 1.2 时间字段语义（全库统一四件套，禁止裸 `timestamp` 命名）
@@ -71,6 +72,14 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | updated_at | |
 
 是否增设 `telegram_peer_aliases`（username/phone → peer 的 `Assign/Resolve` 映射表）由 03 的 resolver 实现定夺（若 contrib 内存层可完全承担则不加表）。
+
+**`telegram_peer_aliases`**（R3.1 落地，03 §1.5）——重启后 Resolve 语义仍完整
+
+| 字段 | 说明 |
+|---|---|
+| **PK(account, alias_type, alias_value)** | alias_type = `username` / `phone` |
+| peer_type + peer_id | 指向 peer（与 telegram_peers 三元组对应） |
+| updated_at | username 可被改绑，Assign 时 upsert、旧绑定替换 |
 
 职责边界：**session blob 只含认证材料**且视为 opaque 字节（不解析、不版本化——未来若自行包 envelope 再定义本项目 `format_version`）；update 恢复状态与 peer 缓存独立持久化（gotd 各自的 storage 接口分别映射到上述表）。写入均为独立小事务的 **upsert（`INSERT … ON DUPLICATE KEY UPDATE`）**，不用 `REPLACE`（其 delete+insert 语义对状态/缓存写入无益且浪费）。
 
@@ -131,7 +140,7 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | 字段 | 说明 |
 |---|---|
 | id BIGINT UNSIGNED PK AI | 内部主键（revisions 与 Qdrant 关联用它） |
-| chat_id + message_id BIGINT UNSIGNED | UNIQUE(chat_id, message_id) |
+| chat_type `VARCHAR(8)` + chat_id + message_id BIGINT UNSIGNED | **UNIQUE(chat_type, chat_id, message_id)**（R3.1：kind 参与身份）；chat_type = user/chat/channel |
 | source_type VARCHAR(24) | `channel_message` / `discussion_message` / `bot_reply`（与 Qdrant kind 对齐） |
 | conversation_id BIGINT UNSIGNED NULL | discussion/bot 消息所属会话（→ conversations.id；频道消息为 NULL） |
 | thread_top_id BIGINT UNSIGNED NULL | 讨论线程顶层消息 ID（Telegram `reply_to_top_id`；非线程消息 = 自身 message_id） |
@@ -142,7 +151,7 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | ai_meta JSON NULL | AI 增强（categories/tags/keywords/entities/importance，reindex 可复用） |
 | published_at / edited_at / deleted_at DATETIME(6) | 语义见 §1.2 |
 | current_revision INT UNSIGNED | 当前修订号 |
-| embedding_state TINYINT | 0=pending / 1=indexed / 2=excluded（P1 用） |
+| embedding_state `VARCHAR(16)` | **索引生命周期状态机（R3.1）**：`pending` / `indexed` / `delete_pending` / `excluded` / `error`。Delete 事务内先置 `delete_pending`（crash window 安全），repair 任务扫描 pending 与 delete_pending 补做 → indexed / excluded（详见 05 §4） |
 | created_at / updated_at | |
 
 **`message_revisions`** — immutable 事件流（只 INSERT，永不 UPDATE/DELETE）
@@ -156,6 +165,17 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | text MEDIUMTEXT NULL / media JSON NULL / ai_meta JSON NULL | 该修订快照（delete 事件为 NULL——事件本身即内容） |
 | edited_at DATETIME(6) NULL | 该修订的 Telegram 编辑时间 |
 | created_at | 本系统记录时间 |
+
+**`media_analyses`**（R3.1，P2）—— Vision 分析结果的 MySQL SoT（若只存 Qdrant，则 Qdrant 不再 disposable，违反 Invariant 1）
+
+| 字段 | 说明 |
+|---|---|
+| PK(message_id, media_key) | media_key = 媒体在 message.media JSON 内的标识 |
+| caption / ocr_text TEXT | 结构化描述 |
+| objects / entities / tags JSON | Vision 输出 |
+| model VARCHAR(64) | 分析模型（reindex 可复用/失效判定） |
+| index_state `VARCHAR(16)` | pending / indexed / error（同消息状态机） |
+| updated_at | |
 
 **写入协议**（引擎内单一入口执行）：
 - New：messages INSERT（revision 0）+ revisions INSERT(rev 0, create)。
@@ -198,6 +218,8 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | ai_model VARCHAR(64) | |
 | source_revision_hash CHAR(64) | 生成时各源消息 revision 的聚合哈希（stale 判定） |
 | is_stale TINYINT(1) | 底层消息编辑/删除后置位 |
+| **index_state `VARCHAR(16)`**（R3.1） | `pending` / `indexed` / `error`——Summary 是一级知识文档（ADR-006），必须与消息同样有索引状态机，否则「commit 后、入队前崩溃」产生永久漏索引（repair 同时扫描 messages 与 summaries，05 §4） |
+| **index_error VARCHAR(255) NULL**（R3.1） | 最近索引失败原因 |
 | report_message_id BIGINT UNSIGNED NULL | 报告消息（水位衔接 + 深链） |
 | created_at | |
 
@@ -212,6 +234,18 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 ### 2.6 用户 / 订阅 / 配额（P1/P2）
 
 - **`users`**：tg_user_id PK、first_name、username（快照）、language、is_blocked、created_at、last_seen。
+- **`user_memories`**（R3.1，P2）—— User Memory 的 MySQL SoT（三级记忆第三层，ADR-006；Qdrant `extracted_memory` 仅为派生）：
+
+| 字段 | 说明 |
+|---|---|
+| id BIGINT UNSIGNED PK AI | |
+| user_id BIGINT UNSIGNED → users.tg_user_id | INDEX(user_id) |
+| kind VARCHAR(24) | preference / fact / interaction_pattern … |
+| content TEXT | 记忆内容 |
+| source_conversation_id / source_message_id BIGINT UNSIGNED NULL | 溯源 |
+| confidence FLOAT | 抽取置信度 |
+| index_state `VARCHAR(16)` | pending / indexed / delete_pending / excluded / error（同状态机） |
+| created_at / updated_at / deleted_at | 软删（delete 同样走 delete_pending） |
 - **`subscriptions`**：PK(user_id, channel_id)。
 - **`usage_quota`**：PK(user_id, quota_date)、used（P2 QA 配额）。
 
@@ -231,7 +265,7 @@ MySQL 8+（或 MariaDB 10.5+），`utf8mb4` / `InnoDB`；迁移由 goose 管理�
 | collection VARCHAR(64) | `sakura_knowledge` / `sakura_conversations` |
 | target_version INT | 正在构建的物理 collection 版本号 |
 | status VARCHAR(16) | running / paused / done / failed |
-| last_message_id BIGINT | 断点：已处理到的 messages.id |
+| **checkpoint JSON**（R3.1） | 断点改为 **per-kind 游标**：`{"messages": 12345, "summaries": 890, "mediaAnalyses": 456, "userMemories": 321}`——collection 内各文档种类（message/summary/vision/memory）独立推进，取代单一 last_message_id |
 | total / done INT | 进度 |
 | error TEXT NULL | 最近错误 |
 | started_at / finished_at | |

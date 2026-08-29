@@ -1,6 +1,6 @@
 # 06 部署、安全与可观测性
 
-- 状态：📝 已成文，待用户审
+- 状态：📝 R3.1 修订版，待快速一致性复核
 - 受约束 ADR：[002](../decisions/002-runtime-model.md) · [005](../decisions/005-go-libraries.md) · [006](../decisions/006-rag-architecture.md)
 
 ## 1. 部署形态
@@ -8,19 +8,18 @@
 ### 1.1 裸机 + systemd（主推）
 
 ```ini
-# deploy/sakura-bot.service
+# deploy/sakura-bot.service（通用 unit：不硬绑具体 MySQL/Qdrant 服务名——各发行版命名不一，P0 也不依赖 Qdrant）
 [Unit]
-Description=Sakura-Bot v2
-After=network-online.target mysqld.service qdrant.service
 Wants=network-online.target
+After=network-online.target
 
 [Service]
 User=sakura
 ExecStart=/usr/local/bin/sakura-bot
 EnvironmentFile=/etc/sakura-bot/.env    # 权限 600，属主 sakura
-Restart=on-failure                     # 非 watchdog（01 §1.5）
+Restart=on-failure                     # 非 watchdog（01 §1.5）；exit 75（重启请求）非零同样会拉起
 RestartSec=5
-# 资源保护
+# 资源保护（示例值，按部署实际调整，非架构硬限制）
 MemoryHigh=512M
 MemoryMax=768M
 
@@ -28,42 +27,38 @@ MemoryMax=768M
 WantedBy=multi-user.target
 ```
 
-Qdrant 与 MySQL 用系统包/官方二进制各自 systemd 管理（文档给出 qdrant.service 示例）。
+本机全套部署需要强启动顺序时，提供 optional drop-in（`systemctl edit` 追加 `After=mariadb.service qdrant.service` 之类），不改主 unit。Qdrant 用官方二进制各自 systemd 管理（文档给出 qdrant.service 示例）。
 
 ### 1.2 Docker（单容器装单二进制，ADR-002）
 
 ```dockerfile
 # 多阶段：node:22 pnpm build → golang:1.26 build（CGO_ENABLED=0）→ distroless/static 运行
-# 非 root 用户；HEALTHCHECK CMD GET /api/health；产物仅一个静态二进制（前端已 embed）
+# 非 root 用户；产物仅一个静态二进制（前端已 embed）
 ```
 
-### 1.3 docker-compose
+- **HEALTHCHECK（R3.1 修正）**：distroless 无 shell/curl/wget，也没有名为 `GET` 的可执行文件——使用程序自带子命令，内部以 `net/http` GET 本机 health endpoint：
 
-```yaml
-services:
-  sakura-bot:
-    build: .
-    env_file: .env
-    restart: unless-stopped
-    mem_limit: 768m
-    depends_on: {mysql: {condition: service_healthy}}
-  mysql:            # profile: full（默认假设外部 MySQL；--profile full 一键起全套）
-    image: mysql:8
-    volumes: [mysql_data:/var/lib/mysql]
-    healthcheck: {test: mysqladmin ping, interval: 10s, retries: 10}
-  qdrant:           # profile: full
-    image: qdrant/qdrant
-    environment: [QDRANT__SERVICE__API_KEY=…]
-    volumes: [qdrant_data:/qdrant/storage]
-    # 不映射公网端口
-profiles: [full]
+```dockerfile
+HEALTHCHECK CMD ["/app/sakura-bot", "healthcheck"]
 ```
+
+### 1.3 docker-compose（R3.1：双文件叠加，不用 profiles）
+
+```text
+compose.yaml        # 仅 sakura-bot（连接用户自备的外部 MySQL/Qdrant）
+compose.full.yaml   # overlay：+ mysql + qdrant + depends_on 健康依赖
+docker compose -f compose.yaml -f compose.full.yaml up -d
+```
+
+- profiles 是 service 级属性且未启用的依赖可能形成无效模型，弃用；双文件叠加最直观。
+- `sakura-bot` 服务：`build: .`、`env_file: .env`、`restart: unless-stopped`、`mem_limit: 768m`（示例值可调）；compose.full.yaml 中 mysql:8（volume + healthcheck）、qdrant/qdrant（volume + `QDRANT__SERVICE__API_KEY`，**不映射公网端口**）。
+- WebUI 监听：compose override 将 `WEBUI_HOST` 设为 `0.0.0.0`（.env 裸机默认 127.0.0.1，01 §6.1）。
 
 ## 2. 升级与回滚
 
 - 升级：停 → 替换二进制 → 启动（goose 自动前向迁移，01 §1.1）。
 - 迁移纪律：**只加不改**；需改列语义时先新增列、双版本窗口后再删旧列；保证回滚一个版本可用。
-- WebUI「重启」按钮：优雅退出（exit 0）由 systemd/compose 拉起新进程（ADR-002 语义）。
+- WebUI「重启」按钮：优雅退出后**以退出码 75 结束**（01 §1.4）——systemd `Restart=on-failure` 对非零退出码拉起新进程（exit 0 会被视为 clean exit 而不重启）；docker `unless-stopped` 同样重新拉起。
 
 ## 3. 备份与恢复
 
@@ -92,7 +87,7 @@ profiles: [full]
 | MySQL | 专用最小权限账号（仅 sakura_bot 库）；绑定内网/127.0.0.1 |
 | Bot token 日志脱敏 | platform/botapi 的 HTTP 日志**不打印完整 URL**（token 在 path 中）；错误信息脱敏 |
 | 依赖漏洞 | CI 跑 `govulncheck`；前端 `pnpm audit` |
-| Telegram 侧 | Bot 仅管理员可用管理命令（admins 表）；User session 是最高价值资产——只在 MySQL 与内存中出现，日志/审计永不输出 |
+| Telegram 侧 | Bot 管理命令白名单 = `settings.system.telegram_admin_ids`（typed config，WebUI 管理；**空 = Telegram 管理命令全部禁用**，用户聊天/问答不受影响——不设独立 admins 表）；User session 是最高价值资产——只在 MySQL 与内存中出现，日志/审计永不输出 |
 
 ## 6. 资源预算（验证性目标，非承诺——ADR-001 内存预期原则）
 

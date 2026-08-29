@@ -1,6 +1,6 @@
 # 03 Telegram 集成与转发
 
-- 状态：📝 已成文，待用户审
+- 状态：📝 R3.1 修订版，待快速一致性复核
 - 受约束 ADR：[001](../decisions/001-telegram-stack.md) · [002](../decisions/002-runtime-model.md) · [008](../decisions/008-rich-message-transport.md)
 
 ## 1. gotd 客户端集成
@@ -22,8 +22,9 @@
 
 ### 1.3 updates 分发与 gap recovery
 
-- **User 客户端**：`updates.Engine`（gap recovery）→ dispatcher → 领域 handler（收到 `domain.ChannelMessage`，已剥离 gotd 类型）：forwarding 订阅 NewMessage（P0）；rag 订阅 New/Edit/Delete（P1）；conversation 订阅讨论群消息（P2）。
-- gap 恢复：Engine 自动拉取 difference（含离线期间），channel PTS 走 per-channel 表；重启后 catch-up 依赖持久化状态，无显式水位补拉（转发回溯补发是独立的 WebUI 手动操作，见 §3.7）。
+- **User 客户端**：`updates.Manager`（gotd 当前对外 API；持久化 StateStorage 见 §1.2）→ dispatcher → 领域 handler（收到 `domain.ChannelMessage`，已剥离 gotd 类型）：forwarding 订阅 NewMessage（P0）；rag 订阅 New/Edit/Delete（P1）；conversation 订阅讨论群消息（P2）。
+- 常规 gap：Manager 的 difference recovery 自动补齐（含离线期间），channel PTS 走 per-channel 表。
+- **异常边界（R3.1，不再宣称「无显式补拉」）**：`OnTooLong` / `OnLoadUserStateFailed` / `OnLoadChannelStateFailed`（含 `ChannelDifferenceTooLong`——无法无限自动恢复）→ 标记该 channel `recovery_required` → **User `GetHistory` 定向补抓** → 补抓消息走**同一条 canonical/dedup 管线**（重复自然被 UNIQUE 键与去重吸收）→ 恢复并写入新 state。
 - **Bot 客户端**：P0 仅连接保活与发送；私聊命令/回调在 P1/P2 接入 dispatcher。Bot **不参与任何频道抓取**（ADR-001 无降级）。
 - handler panic 由 dispatcher 边界 recover 记日志，不影响连接与其他 handler（01 §5.3）。
 
@@ -31,28 +32,32 @@
 
 | 层 | 错误 | 策略 |
 |---|---|---|
-| MTProto（gotd） | FloodWaitError | gotd 内建 sleep 服从；等待 > 1h 的任务记 warn 后丢弃（不无限阻塞队列） |
-| Bot API HTTP | 429 + retry_after | 服从 `retry_after + 1s`，重试上限 3 次 |
+| MTProto（gotd） | FloodWaitError | 统一由 `gotd/contrib/middleware/floodwait`（`Run` / `WithMaxWait` / `WithMaxRetries`）控制，`MaxWait=1h`；**超限语义 = 本次发送失败**：计入 failed、保持未转发状态、**可由回溯补发恢复**——不是「丢弃」，不存在静默消息丢失 |
+| Bot API HTTP | 429 + retry_after | 服从 `retry_after + 1s`，重试上限 3 次；超限同上（failed + 可补发） |
 | Bot API HTTP | 5xx / 网络错误 | 指数退避 1/2/4s，上限 3 次 |
 | AI API | 429 / 5xx | 指数退避 + jitter，3 次；转发改写失败→降级原文；总结失败→任务失败记日志（不降级） |
-| MySQL | 闪断 | 池自动重连 + 语句重试 1 次 |
+| MySQL | 闪断 | 连接池负责重连；**仅 repository 明确判定幂等的读/写可 retry 一次**；事务提交状态未知时**不得自动重放**（防重复 revision/统计），交由上层状态机（如 index_state）收敛 |
 
 ### 1.5 实体解析与 file_reference
 
-- 解析顺序：`telegram_peers`（contrib 内存索引，启动时从 MySQL 预热）→ 未命中则按 username 经 User 客户端 resolve 并回存 → 仍失败则报错。
+- 解析顺序：`telegram_peers`（contrib 内存索引，启动时从 MySQL 预热）→ 未命中则按 alias（username/phone）查 `telegram_peer_aliases`（R3.1 落地，重启后 `Assign/Resolve` 语义完整）→ 仍未命中经 User 客户端 resolve 并回存 peers + aliases → 失败报错。username 改绑时 `Assign` upsert 替换旧绑定。
 - `file_reference` 是**可刷新的缓存引用**（02 §2.3）：下载遇 `FILEREF_INVALID` → 经 User 重新 `get_messages` 刷新 media 元数据（写回 messages.media）→ 重试一次。
 
-### 1.6 相册聚合算法（修复固定窗口丢消息竞态）
+### 1.6 相册聚合算法（R3.1：真动态窗口 + 聚合过滤 + 全成员去重）
 
 ```text
-状态：map[grouped_id] → {msgs, timer}
-首条消息：入 state，启动 timer（默认 2.0s，settings.forwarding.album_window_ms 可调）
-后续同组：append；满 10 条（Telegram 相册上限）→ 提前 flush
-timer 到期：flush（从 map pop 后锁定集合，以首条做规则匹配/过滤/查重）
+状态：map[grouped_id] → {msgs, quietTimer, hardDeadline}
+首条消息：入 state，启动 quiet timer（默认 400–500ms）与 hard deadline（默认 2.0s）
+后续同组：append 并**重置 quiet timer**；满 10 条（Telegram 相册上限）→ 立即 flush
+触发 flush 的三条件（任一）：
+  quiet timeout（组内消息流静默）OR hard deadline OR 集满 10 条
 窗口结束后才到达的同组消息：视为独立新消息走常规流程（记 metric warn，不静默丢弃）
+窗口参数可调（settings.forwarding.album_quiet_ms / album_hard_deadline_ms）
 ```
 
-flush 幂等：以「首条 (chat_id, message_id)」为去重键，重复 flush 无副作用。
+- **过滤对象（R3.1 修正：不只看首条）**：规则匹配/关键词过滤基于**聚合文本**（首条 caption + 各成员 caption/文本拼接）；media_types 过滤基于**全体成员媒体类型并集**。
+- **全成员去重（R3.1）**：发送成功后把**相册全部成员的 source message ID** 写入 `forwarded_messages`（逐条记录，target 相同）——否则未被记录的成员后续可能被当作独立消息再次转发。
+- flush 幂等：以「首条 (chat_type, chat_id, message_id)」为聚合键。
 
 ## 2. Bot 出站传输与 Rich Message Rendering（8.x）
 
@@ -74,7 +79,7 @@ flush 幂等：以「首条 (chat_id, message_id)」为去重键，重复 flush 
 
 ### 2.4 sendRichMessage / sendRichMessageDraft
 
-- `sendRichMessage`：`POST /bot{token}/sendRichMessage`，body 含 `chat_id`（由本层加 `-100` mark，02 §1.1 边界）、`rich_message.markdown`、`reply_parameters`、`reply_markup`。
+- `sendRichMessage`：`POST /bot{token}/sendRichMessage`，body 含 `chat_id`（由本层按 PeerKind 编码：user→`+ID`、chat→`-ID`、channel→`-(1000000000000+ID)`，02 §1.1 边界）、`rich_message.markdown`、`reply_parameters`、`reply_markup`。
 - `sendRichMessageDraft`：**仅私聊**（P2 Bot 私聊 AI 场景）：Draft 流式更新预览 → 最终 `sendRichMessage` 固化。群/讨论群一律：`sendChatAction(typing)` / 处理中状态 → 一次发送。
 
 ### 2.5 reply / thread 映射
@@ -94,9 +99,9 @@ flush 幂等：以「首条 (chat_id, message_id)」为去重键，重复 flush 
 - `net/http` 复用连接；超时 30s；429/5xx 按 §1.4 矩阵；同一 `TELEGRAM_BOT_TOKEN`；**日志脱敏**：不得打印含 token 的 URL（06 §5）。
 - 无 SDK、无常驻连接池之外的状态。
 
-### 2.9 能力版本兼容
+### 2.9 能力版本兼容（R3.1：lazy first-use detection）
 
-启动探测 + 首次使用探测：`sendRichMessage` 若返回 400 unknown method → 置 capability flag（禁用 Rich，全部走 fallback），WebUI 系统页显示该限制；flag 缓存至进程重启。
+不做「启动探测」——不存在无副作用的完整 `sendRichMessage` capability probe。改为**首次真实使用时探测**：第一次真实 Rich 发送返回 method-not-supported 语义（按 Telegram API 错误语义判定，**不写死为 HTTP 400**）→ 置 capability flag（禁用 Rich，全部走 fallback），WebUI 系统页显示该限制；flag 缓存至进程重启。
 
 ## 3. 转发引擎（P0 核心）
 
@@ -133,7 +138,7 @@ flush 幂等：以「首条 (chat_id, message_id)」为去重键，重复 flush 
 
 ### 3.5 去重与统计
 
-- 去重键 `(source_chat_id, source_message_id, target_chat_id)`；`content_dedup` 开启时附加内容哈希比对（防删帖重发）。
+- 去重键 `(source_chat_type, source_chat_id, source_message_id, target_chat_id)`（R3.1：kind 参与身份）；`content_dedup` 开启时附加内容哈希比对（防删帖重发）。
 - **发送成功才写 forwarded_messages**；stats 按**真实成败**计数（修复源项目假成功问题）。
 
 ### 3.6 底栏模板

@@ -1,6 +1,6 @@
 # 04 WebUI 与 API
 
-- 状态：📝 已成文，待用户审
+- 状态：📝 R3.1 修订版，待快速一致性复核
 - 受约束 ADR：[003](../decisions/003-webui-form.md) · [004](../decisions/004-frontend-stack.md)
 
 ## 1. 页面清单与路由
@@ -23,7 +23,7 @@
 
 ## 2. REST API 清单（`/api` 前缀；全部写操作落 system_audit_logs）
 
-**auth（公开）**：`POST /auth/login` `{username,password}` → `{token}`；`POST /auth/refresh`。
+**auth（公开）**：`POST /auth/login` `{username,password}` → `Set-Cookie`（HttpOnly 会话，见 §4）；`POST /auth/logout`；`GET /auth/status`。
 
 **system**：`GET /health`（公开，仅 status/version/uptime，01 §1.5）；`GET /system/status`（组件细项+指标+Rich flag+degraded 原因）；`POST /system/pause|resume|restart`；`PUT /system/log-level`；`GET /system/audit-logs`。
 
@@ -41,20 +41,31 @@
 
 ## 3. DTO 约定
 
-- JSON `camelCase`；时间 ISO 8601 UTC；Telegram ID 以字符串传输（避免 JS number 精度丢失，>2^53 风险）。
+- JSON `camelCase`；时间 ISO 8601 UTC；Telegram ID 以字符串传输。理由（R3.1 修正）：与 Go/MySQL `BIGINT` 模型统一、避免 Bot API 正负/`-100` 编码与裸 ID 混入 JS number、为大整数语义演进留余量（Bot API 当前承诺 dialog ID ≤52 有效位，尚无精度问题——仍统一 string）。
 - 错误结构：`{"error": {"code": "VALIDATION_ERROR", "message": "…", "detail": {…字段错误…}}}`。
 - 分页：`{"items": […], "total": n, "nextCursor?": "…"}`。
 - **前端不成为配置真相源**（ADR-003）：所有写操作走上述 API → Go service 层 → MySQL；前端缓存仅展示用。
 
-## 4. JWT 鉴权细节
+## 4. 会话鉴权（R3.1 重写：server-side opaque session，不用 JWT）
 
-- login：`secrets.compare_digest` 恒定时间比较 `.env` 凭据 → 签发 JWT HS256（sub=username, exp=12h）；refresh 签发新 token（最长 7d 滑动）。
-- 签名密钥：`sha256(WEBUI_PASSWORD + ":" + WEBUI_USERNAME + ":sakura-webui")` 派生（改密码即全部失效）。
-- 失败防护：同一 IP 5 次失败锁 10 分钟（内存计数）；成功登录写审计。
-- 中间件：`Authorization: Bearer`；豁免：`/api/health`、`/api/auth/*`、静态资源。
-- WebSocket：首帧 `{type:"auth", token}` 鉴权失败即断开。
+ADR-005 未拍板任何 JWT 库，Go 标准库亦无 JWT；本系统是单实例、单管理员、同源 SPA——引入 JWT 库或手写 JWT 均无收益。
+
+```text
+POST /auth/login
+    ↓ crypto/subtle.ConstantTimeCompare 比较 .env 凭据
+    ↓ crypto/rand 生成 256-bit session id（opaque）
+    ↓ 服务端内存 session store（重启即失效，重新登录一次可接受）
+    ↓ Set-Cookie: HttpOnly; SameSite=Strict; Secure（TLS 时）; Path=/; Max-Age=12h
+```
+
+- 收益：不新增 JWT library、token 不暴露给 JS、无 localStorage、无 refresh token。
+- 会话固定 12h；登出即从 store 删除。
+- 失败防护：同一来源 5 次失败锁 10 分钟（内存计数）。**IP 来源**：默认真实 TCP `RemoteAddr`；仅在显式配置 trusted proxy 后才采信 `X-Forwarded-For`（不无条件信任代理头）。成功登录写审计。
+- 中间件：Cookie 校验；豁免：`/api/health`、`/api/auth/login`、静态资源。
 
 ## 5. WebSocket 协议（`/api/ws`）
+
+鉴权：**同源 Cookie（§4）+ Origin 校验**，拒绝跨域连接（不传 token）。
 
 ```text
 server → client:
@@ -63,7 +74,6 @@ server → client:
   {type:"task", name, progress, detail?}    // reindex/回溯进度
   {type:"ping"}（30s 心跳）
 client → server:
-  {type:"auth", token}
   {type:"subscribe", levels?, components?, keyword?}   // 日志过滤在服务端做（环形缓冲容量内）
   {type:"ping"}
 ```
@@ -83,6 +93,6 @@ API DTO（types.ts）
   → Naive UI 组件
 ```
 
-- axios 拦截器：请求附 JWT；401 → 跳 `/login`；错误 toast 统一格式。
+- axios 拦截器：同源 Cookie 自动携带（`withCredentials` 同源默认）；401 → 跳 `/login`；错误 toast 统一格式。
 - 组件层不反向泄漏（NDataTable 的 row 类型不出现在 model 层）。
 - 构建：`pnpm build` → `dist/` → `go:embed`（运行时零 Node）；开发期 Vite proxy → 本地 Go 服务。
