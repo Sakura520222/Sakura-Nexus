@@ -1,7 +1,7 @@
 # Sakura-Bot Go P0 实施计划（R1）
 
-- 状态：📝 R1 修订版，待用户核对 diff——**批准前零实现代码**
-- 日期：2026-08-29（R0 同日；R1 落实用户审核的 4 项必改 + Gate 加强 + 前移/命名/计数修正）
+- 状态：📝 R1.1 修订版，待用户核对——**批准前零实现代码**
+- 日期：2026-08-29（R0 → R1 → R1.1；R1 落实 4 项必改 + Gate 加强；R1.1 闭合 3 个实施前缺口 + cursor 定义 + compose.test.yaml）
 - 依据：已冻结的 [ADR 001–008](../decisions/README.md) 与总体设计 [overview](../design/overview.md) + 01–07（R3.1.1）
 - 规模：**32 个任务 + 4 个正式 Gate**（GATE-1/2/3/4）+ 1 个非 Gate 冒烟检查点（Rich smoke checkpoint）
 
@@ -29,7 +29,7 @@ Phase 0 地基                 Phase 1 Telegram 风险验证（GATE-1）
 T0.1 module 骨架 ──┬─→ T1.0 最小 domain 类型（ChatRef/PeerKind/MessageRef/
 T0.2 渐进 CI(仅Go) │       ChannelMessage/MediaRef/Entity）
      + .golangci  └─→ T1.1 Bot 连通（Auth().Bot+Self()）+ 0001 迁移
-T0.3 config .env          + 最小 sqlx 池（T2.2 完善）
+T0.3 config .env          + 可复用 goose runner + 最小 sqlx 池（T2.2 完善）
                                ↓
                           T1.2 User 连通 + login-user CLI（UserAuthService 唯一实现）
                                ↓
@@ -75,8 +75,8 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 
 | 迁移 | 表 | 服务的任务 |
 |---|---|---|
-| `0001_telegram_foundation.sql` | gotd_sessions、telegram_update_states、telegram_channel_states、telegram_peers、telegram_peer_aliases、**messages、message_revisions** | T1.1 建迁移；T1.3 使用——**GATE-1 的风险验证基座** |
-| `0002_p0_business.sql` | settings、channels、channel_settings、forward_rules、forwarded_messages、forwarding_stats、system_audit_logs | T2.1 |
+| `0001_telegram_foundation.sql` | gotd_sessions、telegram_update_states、telegram_channel_states、telegram_peers、telegram_peer_aliases、**messages、message_revisions** | T1.1 建迁移 + **实现可复用 goose runner**（embed + 启动即 Up，迁移机制单一实现） |
+| `0002_p0_business.sql` | settings、channels、channel_settings、forward_rules、forwarded_messages、forwarding_stats、system_audit_logs | T2.1 新增迁移；**复用同一 runner**，验证自动 Up 至最新 |
 
 ## 5. 任务表（验证：U=单元 I=集成 S=手动冒烟）
 
@@ -85,7 +85,7 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 | # | 任务 | 交付物 | 验证 | 依赖 |
 |---|---|---|---|---|
 | T0.1 | Go module 骨架：`go.mod`（**`module github.com/Sakura520222/Sakura-Bot`**，从第一天用 canonical path）、`cmd/sakura-bot/main.go`（仅 --version）、`internal/{app,config,logging,platform/{mysql,telegram,botapi,ai},forwarding,webapi,domain}` 空包、Makefile、`.env.example`（01 §6.1 全量） | 可编译空项目 | `go build ./...` | — |
-| T0.2 | **渐进 CI（R1：仅 Go 部分）**：gofmt、golangci-lint（**交付 `.golangci.yml` + depguard 规则落点**）、`go test -race`、`go build`、MySQL integration 基础设施（service container + `integration` build tag 骨架）。web/Docker job **不在此阶段创建**（分别由 T5.4/T6.2 追加），不用 `if: exists(...)` 假绿 | `.github/workflows/ci.yml` + `.golangci.yml` | push 后 CI 绿 | T0.1 |
+| T0.2 | **渐进 CI（R1：仅 Go 部分）**：gofmt、golangci-lint（**交付 `.golangci.yml` + depguard 规则落点**）、`go test -race`、`go build`、MySQL integration 基础设施（service container + `integration` build tag 骨架）+ **仅 MySQL 的 `compose.test.yaml`**（R1.1：本地固定环境，自 T1.1 起跑 `-tags integration` 不依赖正式 compose）。web/Docker job **不在此阶段创建**（分别由 T5.4/T6.2 追加），不用 `if: exists(...)` 假绿 | `.github/workflows/ci.yml` + `.golangci.yml` + `compose.test.yaml` | push 后 CI 绿 | T0.1 |
 | T0.3 | `internal/config`：.env struct + 必填校验 + 加载 | U：缺必填报全量缺失项 | U | T0.1 |
 
 ### Phase 1：Telegram 风险验证（GATE-1）
@@ -93,7 +93,7 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 | # | 任务 | 交付物 | 验证 | 依赖 |
 |---|---|---|---|---|
 | T1.0 | **最小 domain 类型（R1 前移）**：ChatRef/PeerKind、MessageRef、ChannelMessage、MediaRef、Entity——dispatcher 与 canonical writer 的输入输出类型，保证 repository **不吃 gotd `tg.Message`** | 类型 + 单测 | U | T0.3 |
-| T1.1 | **Bot 客户端最小连通**：`platform/telegram.BotClient` + MySQL `session.Storage` + **`0001_telegram_foundation.sql`（§4 七表）** + 最小 sqlx 池（T2.2 完善）+ 登录验证流程 **`Auth().Bot(ctx, token)` → `Self(ctx)` → 校验 `self.Bot == true` / ID / username**（MTProto，不调 HTTP getMe） | `cmd/smoke/smoke-bot`：登录→Self→打印身份→优雅关闭（session 落库） | **S（首次真实 TG）** + I（storage 往返） | T1.0, T0.2 |
+| T1.1 | **Bot 客户端最小连通**：`platform/telegram.BotClient` + MySQL `session.Storage` + **`0001_telegram_foundation.sql`（§4 七表）** + **可复用 goose runner（R1.1：embed migrations + 执行 0001——迁移机制单一实现，Phase 2 不换工具）** + 最小 sqlx 池（T2.2 完善）+ 登录验证流程 **`Auth().Bot(ctx, token)` → `Self(ctx)` → 校验 `self.Bot == true` / ID / username**（MTProto，不调 HTTP getMe） | `cmd/smoke/smoke-bot`：登录→Self→打印身份→优雅关闭（session 落库） | **S（首次真实 TG）** + I（storage 往返） | T1.0, T0.2 |
 | T1.2 | **User 客户端最小连通**：`UserClient` + `sakura-bot login-user` CLI 子命令——**UserAuthService/auth flow 状态机在此唯一实现**（手机号/验证码/2FA），后续 T5.3 WebUI 向导仅作 presentation adapter 复用，不得重写第二套 | `cmd/smoke/smoke-user`：登录→收一条 update→打印→重启免登录 | S + I | T1.1 |
 | T1.3 | **状态闭环（R1 扩充）**：① `telegram_update_states/channel_states/peers/aliases` 的 gotd 存储实现；② **完整 Manager wiring：`updates.Manager` + `UpdateHandler` + `updhook.UpdateHook` + `updhook.AffectedHook`（自身 read/delete 返回的 affectedMessages 同步更新本地 PTS）+ `StateStorage` + dispatcher 雏形**；③ 四个 recovery callback 处置（channel 级补抓 / global 全量 reconciliation / inaccessible→unavailable）；④ **正式 MessageRepository / canonical writer**（New/Edit/Delete 单一写入协议，02 §2.3） | U（状态机/fake writer）+ I（storage 往返/换号清旧）+ **S：smoke-recovery**（重启 catch-up、拔网重连、真实频道发消息→messages 落库） | U+I+S | T1.2 |
 | **GATE-1** | 真实频道消息可靠落库 + 重启 catch-up + 断线恢复全部成立（smoke-bot/user/recovery 为其验证内容）。**不成立 → 停止实施，回设计层重估（可能涉及 ADR 修订）** | 冒烟记录入 progress.md | S | T1.3 |
@@ -103,7 +103,7 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 | # | 任务 | 交付物 | 验证 | 依赖 |
 |---|---|---|---|---|
 | T2.0 | **production lifecycle（R1 前移）**：service 抽象、supervisor（OWN_FATAL 指数退避重启该服务 / DEPENDENCY_UNAVAILABLE 等待 Availability）、退出码（0/1/2/75）、readiness barrier；后续全部业务 service 以此形态实现 | U（生命周期状态机、假服务编排/关闭顺序） | U | GATE-1 |
-| T2.1 | `0002_p0_business.sql`（§4 七表）+ goose runner（embed + 启动即 Up） | 迁移文件 | I（幂等 Up×2） | T2.0 |
+| T2.1 | 新增 `0002_p0_business.sql`（§4 七表）；**复用 T1.1 的同一 goose runner**，验证启动自动 Up 至最新版本（含 0001→0002 顺序升级） | 迁移文件 | I（幂等 Up×2、顺序升级） | T2.0 |
 | T2.2 | Database 完善：事务帮助、幂等 retry 语义（03 §1.4：事务提交状态未知不得自动重放） | U + I | U+I | T2.1 |
 | T2.3 | settings 中心：P0 scopes（system/forwarding/logging/ai）typed struct + 快照 + 热更回调 | U | U | T2.1 |
 | T2.4 | repositories（R1：MessageRepo 已在 T1.3，此处只补）：ChannelRepo、RuleRepo（含 ChatRef 列）、ForwardedRepo（五列 PK）、StatsRepo、AuditRepo | I（CRUD/唯一键冲突语义） | I | T2.2 |
@@ -116,7 +116,7 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 | T3.2 | 过滤链纯函数（03 §3.2 顺序；相册聚合文本/媒体并集入参） | 表驱动全正反例 | U | T3.1 |
 | T3.3 | 相册聚合器（quiet 400ms 重置 / hard 2s / 集满 10；全成员 flush） | 假时钟单测 | U | T3.1 |
 | T3.4 | Outbound MTProto：send_message（entities 透传、>4096 entity 边界分段）、send_file（attributes 保留）、forward_messages | fake Sender + S（单条发送冒烟） | U+S | T1.3, T3.1 |
-| T3.5 | engine 编排：规则匹配（ChatRef）→ 过滤 → 去重 → 发送队列（容量 100 阻塞背压、单消费者、随机延迟、FloodWait 矩阵）→ 真实成败统计 → **contiguous cursor（R1 必改 4：见 §6）** | 全链 fake 单测（多规则/去重/失败不计成功/**cursor 不越过 transient failure**） | U | T3.2–3.4, T2.4 |
+| T3.5 | engine 编排：规则匹配（ChatRef）→ 过滤 → 去重 → 发送队列（容量 100 阻塞背压、单消费者、随机延迟、FloodWait 矩阵）→ 真实成败统计 → **contiguous cursor（R1 必改 4：见 §6）** | 全链 fake 单测（多规则/去重/失败不计成功/**cursor 不越过 transient failure**） | U | T3.2–3.4, T2.4, **T2.3（R1.1：随机延迟区间/content_dedup 等运行时配置来自 settings.forwarding；T3.7/T3.8 经 T3.5 获得前置）** |
 | T3.6 | 媒体下载：流式临时文件、大小上限、即时删除 + 启动清理 | U + S | U+S | T3.4 |
 | T3.7 | AI rewrite：`platform/ai`（openai-go、WithBaseURL、重试/降级矩阵） | U（fake openai、降级路径） | U | T3.5 |
 | T3.8 | 底栏模板 + 源链接规则（私有频道 stripped id） | U | U | T3.5 |
@@ -146,7 +146,7 @@ T6.1 healthcheck 子命令 → T6.2 Docker/compose 双文件/systemd + CI 追加
 | # | 任务 | 交付物 | 验证 | 依赖 |
 |---|---|---|---|---|
 | T6.1 | `sakura-bot healthcheck` 子命令（net/http GET 本机 /api/health） | 手测 | S | T5.2 |
-| T6.2 | Dockerfile（多阶段+distroless+HEALTHCHECK 子命令）、compose.yaml + compose.full.yaml、deploy/sakura-bot.service + qdrant.service 示例；**CI 追加 docker job（docker build + 双 compose config -q）** | compose config 两组合通过 + 本地容器起停 | S | GATE-3 |
+| T6.2 | Dockerfile（多阶段+distroless+HEALTHCHECK 子命令）、**`compose.yaml`（仅 sakura-bot）+ `compose.full.yaml`（sakura-bot + MySQL）**（R1.1：**P0 无任何 Qdrant 交付物**；P1 再把 Qdrant 加入 full overlay 并新增 qdrant systemd 示例）、`deploy/sakura-bot.service`；**CI 追加 docker job（docker build + 双 compose config -q）** | compose config 两组合通过 + 本地容器起停 | S | GATE-3 |
 | T6.3 | README（快速开始、两形态部署、冒烟清单） | 文档 | — | T6.2 |
 | T6.4 | **P0 验收执行**：07 §3 P0 checklist 逐项（gap-too-long 定向恢复、相册全成员 dedup、24h 稳定性 + 内存记录） | 验收报告（progress.md） | S | T6.2, T6.3 |
 | **GATE-4** | P0 完成 → 交付用户验收 | — | — | T6.4 |
@@ -163,6 +163,7 @@ non-terminal（不得越过推进）：transient send failure（FloodWait 超限
 下次 backfill：GetHistory(minID=99) → 100 重试 → 101/102 dedup 跳过 → 100 成功后连续推进至 102
 ```
 
+- **"continuous" 的定义**：指**实际观察/历史拉取到的有序消息流中不存在更早的 unresolved 消息**，不是要求 `message_id == cursor + 1` 的数值连续（Telegram message ID 存在空洞属正常现象）。
 - 否则「failed + backfill recoverable」只是文档承诺。T3.5（引擎写入侧）与 T3.9（backfill 读取侧）的验证条件都必须包含上述恢复用例。
 - 永久性失败（如消息已被源删除、目标频道被踢）按配置策略处理：有限次重试后标记 terminal 并记录，避免 cursor 永久卡死。
 

@@ -111,3 +111,12 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 用户强调（三叹号）：**不要从旧 Sakura-Bot 迁移**。已将铁律写入 P0 计划 §1：数据不迁移（02 §5 既有）+ 代码不复制不逐行翻译（新增）；旧项目仅作调研报告中的业务参考；v2 从 T0.1 第一行 Go 全新编写。
 - 同步更新持久记忆（技术栈 Go 等既有变化一并修正）。
 - 状态：P0 计划 R1 + 铁律修订，待用户核对 diff 后批准开工。
+
+## 2026-08-29 · 会话 1（续）：P0 计划 R1.1 cleanup
+
+- ①goose runner 前移至 T1.1（可复用 runner + embed + 执行 0001；迁移机制单一实现）；T2.1 改为新增 0002 + 复用同一 runner 验证顺序升级。
+- ②T3.5 依赖显式补 T2.3（settings：延迟区间/content_dedup；T3.7/T3.8 经 T3.5 获得前置）。
+- ③T6.2 移除全部 Qdrant 交付物：compose.yaml 仅 sakura-bot、compose.full.yaml = +MySQL、deploy 仅 sakura-bot.service；Qdrant overlay 与 systemd 示例归 P1。
+- ④§6 补「continuous」定义：有序流中无更早 unresolved，非 message_id 数值连续（ID 空洞正常）。
+- 非阻塞采纳：T0.2 交付仅 MySQL 的 compose.test.yaml（本地 -tags integration 固定环境）。
+- 状态：R1.1 待核对指定修改点；通过即批准 T0.1 开工。
