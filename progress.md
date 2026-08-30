@@ -210,3 +210,11 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 用户持久授权：此后提交验证绿后**自行 push**（已记入持久记忆）；红 CI 优先修复等纪律不变。
 - 非阻塞待办（用户建议，有空处理）：MigrateDownTo 收进 _test.go，避免生产 API 面存在回滚入口。
 - 下一步：T2.0 CI 绿 → T2.1（0002_p0_business.sql：settings/channels/channel_settings/forward_rules/forwarded_messages/forwarding_stats/system_audit_logs 七表 + 复用同一 runner 验证顺序升级）。
+
+## 2026-08-29 · 会话 1（续）：T2.1/T2.2 完成并 push
+
+- T2.1（b6edbce，CI success）：0002_p0_business.sql 七业务表；TestMigrateFullCycle 扩至 14 表，空库 Up 实证 0001→0002 顺序升级。
+- 顺手项完成（9a3ce66，CI success）：MigrateDownTo 收进 _test.go。
+- T2.2（本 commit）：internal/platform/mysql/database.go——WithTx（fn 错误/panic 均回滚、Commit 失败状态未知不重放）+ RetryIdempotent（isTransient 判定 2006/2013/ErrInvalidConn/driver.ErrBadConn，仅幂等操作重试一次）；MessageRepository 三方法切统一事务路径，顺修原实现 panic 不回滚的连接悬挂问题；集成测试覆盖提交/回滚/panic 回滚/重试语义。
+- 流程：push 授权生效后自主 push + gh CLI 监控 CI 终态（T2.0/refactor/T2.1 三连绿）。
+- 下一步：T2.3 settings 中心（P0 scopes typed struct + 快照 + 热更回调）。
