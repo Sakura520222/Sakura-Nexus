@@ -78,9 +78,12 @@ func TestMigrateFullCycle(t *testing.T) {
 		}
 	}
 
+	// 0001 七张 + 0002 七张（T2.1：空库 Up 自动顺序升级到最新）
 	for _, table := range []string{
 		"gotd_sessions", "telegram_update_states", "telegram_channel_states",
 		"telegram_peers", "telegram_peer_aliases", "messages", "message_revisions",
+		"settings", "channels", "channel_settings", "forward_rules",
+		"forwarded_messages", "forwarding_stats", "system_audit_logs",
 	} {
 		var n int
 		err := db.GetContext(ctx, &n,
