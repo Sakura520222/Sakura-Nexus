@@ -226,3 +226,11 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 过程修正两个真 bug（集成测试抓出）：①IncrStats 首次插入计 0 丢计数（INSERT VALUES 硬编码 0 首次不走 duplicate 分支）→ 改 VALUES 参数化 + duplicate 增量；②SELECT * 缺 created_at/updated_at 映射（python 补丁因 gofmt 对齐静默未命中，Edit 精确修复）。
 - CI 流程：T2.0/9a3ce66/T2.1/T2.2 四连绿（gh CLI 监控）；T2.3+T2.4 push 后监控中。
 - Phase 2 进度：T2.0✅ T2.1✅ T2.2✅ T2.3✅ T2.4✅（commit 层面；CI 待绿）→ 下一阶段 Phase 3 转发引擎（T3.1 outbound domain 补全起）。
+
+## 2026-08-29 · 会话 1（续）：Phase 3 开工（T3.1/T3.2 完成 + 一次 CI 红修复）
+
+- T3.1（14574fe，CI success）：outbound domain——SendStyle/SendRequest（统一出站模型）/SentMessage/Keyboard/MessageContent/AIResponse（无 Telegram 类型契约，WebUI 可复用）。
+- T3.2（9a62f1c → CI 红）：过滤链纯函数 FilterView（相册聚合视图）/MatchSource（ChatRef 精确+username 归一化辅助）/ShouldForward 固定序（原创→关键词→正则→黑名单→媒体类型并集）。
+  - **CI 红根因（流程失误）**：提交时误跑 `go test ./internal/domain/` 而非 `./internal/forwarding/`，把一个数据写错的 MatchSource case（「规则 username 空」实际是 id 精确命中应 true）推上 CI。修复 1ec30c5。教训固化：**提交前必须跑 ./... 全量而非单个包**。
+- T3.3（工作区完成待 CI 绿）：AlbumAggregator——真动态窗口（quiet 450ms 重置 + hard 2000ms 上限 + 集满 10 同步 flush + FlushDue 硬上限兜底 + 迟到成员独立新组）；假时钟 6 测试全绿。开发修正：albumMsg helper 漏设 GroupedID（全部走透传分支，测试无效——已补）；硬上限 flush 实际发生在 FlushDue 而非 Add（测试预期修正）。
+- 当前：T3.2 fix CI 监控中 → 绿后提交 T3.3。
