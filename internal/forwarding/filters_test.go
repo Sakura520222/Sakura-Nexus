@@ -10,7 +10,8 @@ import (
 
 func albumMsg(id int64, text string, mediaType string, forwarded bool) domain.ChannelMessage {
 	m := domain.ChannelMessage{
-		Ref: domain.MessageRef{Chat: domain.NewChatRef(domain.PeerChannel, 1), MessageID: id},
+		Ref:       domain.MessageRef{Chat: domain.NewChatRef(domain.PeerChannel, 1), MessageID: id},
+		GroupedID: 777, // 相册测试默认分组；单条测试由调用方置 0
 	}
 	if text != "" {
 		m.Text = text
@@ -72,7 +73,7 @@ func TestMatchSource(t *testing.T) {
 		{"username 忽略大小写与@", domain.NewChatRef(domain.PeerChannel, 999), "@srcchan", true},
 		{"username 不同", domain.NewChatRef(domain.PeerChannel, 999), "other", false},
 		{"规则无 username 辅助时不匹配", domain.NewChatRef(domain.PeerChannel, 999), "srcchan", true},
-		{"规则 username 空", domain.ForwardRule{Source: rule.Source}.Source, "", false},
+		{"消息无 username 且 id 不匹配", domain.NewChatRef(domain.PeerChannel, 999), "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
