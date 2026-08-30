@@ -4,13 +4,18 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
 
 	"github.com/gotd/td/session"
 	"github.com/jmoiron/sqlx"
+	goose "github.com/pressly/goose/v3"
+
+	"github.com/Sakura520222/Sakura-Nexus/migrations"
 )
 
 // testDB 返回连向 SAKURA_TEST_MYSQL_* 的池；未配置时跳过（T0.2 约定）。
@@ -64,7 +69,7 @@ func atoiDefault(s string, def int) int {
 func TestMigrateFullCycle(t *testing.T) {
 	db, ctx := testDB(t)
 
-	if err := MigrateDownTo(ctx, db.DB, 0); err != nil {
+	if err := migrateDownTo(ctx, db.DB, 0); err != nil {
 		t.Fatalf("DownTo(0): %v", err)
 	}
 	for i := 1; i <= 2; i++ {
@@ -123,4 +128,17 @@ func TestSessionStorageRoundtrip(t *testing.T) {
 	if err := db.GetContext(ctx, &rows, "SELECT COUNT(*) FROM gotd_sessions WHERE account='itest'"); err != nil || rows != 1 {
 		t.Errorf("upsert 后应恰 1 行（rows=%d err=%v）", rows, err)
 	}
+}
+
+// migrateDownTo 回退 schema 到指定版本——仅测试使用（TestMigrateFullCycle 的
+// fresh-schema 保证）。生产 API 不暴露回滚入口（06 §2：升级只加不改，永不 Down）。
+func migrateDownTo(ctx context.Context, db *sql.DB, version int64) error {
+	provider, err := goose.NewProvider(goose.DialectMySQL, db, migrations.FS)
+	if err != nil {
+		return fmt.Errorf("goose provider 构造失败: %w", err)
+	}
+	if _, err := provider.DownTo(ctx, version); err != nil {
+		return fmt.Errorf("goose downTo(%d) 失败: %w", version, err)
+	}
+	return nil
 }

@@ -22,16 +22,3 @@ func MigrateUp(ctx context.Context, db *sql.DB) error {
 	}
 	return nil
 }
-
-// MigrateDownTo 回退到指定版本（0 = 全部撤销）。仅测试使用（TestMigrateFullCycle
-// 的 fresh-schema 保证）；生产升级纪律是只加不改（06 §2），永不 Down。
-func MigrateDownTo(ctx context.Context, db *sql.DB, version int64) error {
-	provider, err := goose.NewProvider(goose.DialectMySQL, db, migrations.FS)
-	if err != nil {
-		return fmt.Errorf("goose provider 构造失败: %w", err)
-	}
-	if _, err := provider.DownTo(ctx, version); err != nil {
-		return fmt.Errorf("goose downTo(%d) 失败: %w", version, err)
-	}
-	return nil
-}
