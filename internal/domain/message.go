@@ -27,6 +27,7 @@ type MediaRef struct {
 	Key      string `json:"key"` // 消息内唯一标识（如 photo:0）——下载与 vision 分析定位
 	Type     string `json:"type"`
 	MimeType string `json:"mimeType,omitempty"`
+	FileName string `json:"fileName,omitempty"`
 	FileRef  string `json:"fileRef,omitempty"`
 	Width    int    `json:"width,omitempty"`
 	Height   int    `json:"height,omitempty"`
