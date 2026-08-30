@@ -202,3 +202,11 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 修复（12f5934）：testDB（raw）/testMigratedDB（连接+MigrateUp）拆分；四个业务表契约测试全部用 migrated fixture；迁移测试改造为 TestMigrateFullCycle（MigrateDownTo(0) → Up×2）——既有库上也能验证「0001 从空库构建成功」；migrate.go 增 MigrateDownTo（仅测试用，生产只加不改纪律不变）。
 - 本地环境插曲：GOTOOLCHAIN=auto 已切 go1.27.0，golangci-lint（1.26 构建）读 1.27 缓存崩溃 → 以 1.27 重装 golangci-lint 2.13.2 解决。CI 锁 1.26 不受影响。
 - T2.0 production lifecycle 已完成并本地全绿（单测 6 包/集成/lint 0/build），按用户门禁**暂停提交**等 fixture CI 绿：internal/availability（可重复连接状态模型：Tracker/WaitReady/SubscribeState，01 §1.3）+ internal/app（Service/Criticality/supervisor：OWN_FATAL 退避重启仅该服务、CORE fatal→exit 1、panic 边界、逆序关闭总预算、readiness barrier、RequestRestart→exit 75；8 个时序测试）。
+
+## 2026-08-29 · 会话 1（续）：GATE-1 封板 + T2.0 提交
+
+- 用户确认 CI Run #9 全绿（lint/build/unit/integration），**GATE-1 正式 PASS + SEALED**。
+- T2.0 提交并 push（4ee8e54）：internal/app lifecycle + internal/availability（本地全绿：lint 0 / 两包测试过）。单一提交链，不含 T2.1 内容（bisect 干净）。
+- 用户持久授权：此后提交验证绿后**自行 push**（已记入持久记忆）；红 CI 优先修复等纪律不变。
+- 非阻塞待办（用户建议，有空处理）：MigrateDownTo 收进 _test.go，避免生产 API 面存在回滚入口。
+- 下一步：T2.0 CI 绿 → T2.1（0002_p0_business.sql：settings/channels/channel_settings/forward_rules/forwarded_messages/forwarding_stats/system_audit_logs 七表 + 复用同一 runner 验证顺序升级）。
