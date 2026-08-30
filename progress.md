@@ -195,3 +195,10 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
   - 正文均为用户频道内容，记录仅存计数与 msg_id
 - **GATE-1 宣告 PASS**：Bot 连通（T1.1）✓ + User 连通（T1.2）✓ + 状态闭环（T1.3：可靠落库/重启 catch-up）✓。断线重连为 gotd 内建（进程级重启恢复已实证；DEPENDENCY_UNAVAILABLE 行为将在 T2.0 单测覆盖）。
 - 依据用户边界要求：GATE-1 PASS 后方可进入 T2.0（production lifecycle）——下一任务。
+
+## 2026-08-29 · 会话 1（续）：CI 红（fixture 隔离缺陷）修复 + T2.0 完成待提交
+
+- 用户诊断 CI Run #8 integration 红：T1.3 契约测试隐式依赖「迁移测试先执行」——CI 空库上 t13 文件先跑而炸（本地绿因 test_db 已被 smoke 迁移过）。属测试隔离缺陷，与 GATE-1 的 Telegram 闭环无关。
+- 修复（12f5934）：testDB（raw）/testMigratedDB（连接+MigrateUp）拆分；四个业务表契约测试全部用 migrated fixture；迁移测试改造为 TestMigrateFullCycle（MigrateDownTo(0) → Up×2）——既有库上也能验证「0001 从空库构建成功」；migrate.go 增 MigrateDownTo（仅测试用，生产只加不改纪律不变）。
+- 本地环境插曲：GOTOOLCHAIN=auto 已切 go1.27.0，golangci-lint（1.26 构建）读 1.27 缓存崩溃 → 以 1.27 重装 golangci-lint 2.13.2 解决。CI 锁 1.26 不受影响。
+- T2.0 production lifecycle 已完成并本地全绿（单测 6 包/集成/lint 0/build），按用户门禁**暂停提交**等 fixture CI 绿：internal/availability（可重复连接状态模型：Tracker/WaitReady/SubscribeState，01 §1.3）+ internal/app（Service/Criticality/supervisor：OWN_FATAL 退避重启仅该服务、CORE fatal→exit 1、panic 边界、逆序关闭总预算、readiness barrier、RequestRestart→exit 75；8 个时序测试）。
