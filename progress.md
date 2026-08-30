@@ -234,3 +234,10 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
   - **CI 红根因（流程失误）**：提交时误跑 `go test ./internal/domain/` 而非 `./internal/forwarding/`，把一个数据写错的 MatchSource case（「规则 username 空」实际是 id 精确命中应 true）推上 CI。修复 1ec30c5。教训固化：**提交前必须跑 ./... 全量而非单个包**。
 - T3.3（工作区完成待 CI 绿）：AlbumAggregator——真动态窗口（quiet 450ms 重置 + hard 2000ms 上限 + 集满 10 同步 flush + FlushDue 硬上限兜底 + 迟到成员独立新组）；假时钟 6 测试全绿。开发修正：albumMsg helper 漏设 GroupedID（全部走透传分支，测试无效——已补）；硬上限 flush 实际发生在 FlushDue 而非 Add（测试预期修正）。
 - 当前：T3.2 fix CI 监控中 → 绿后提交 T3.3。
+
+## 2026-08-29 · 会话 1（终）：T3.4 完成，收工交接
+
+- T3.4（36da5fa，CI 监控中）：Outbound MTProto——SendText（entities 透传 + >4096 entity 边界分段纯函数）/SendFiles（uploader 上传 → InputMediaUploadedPhoto/Document → 相册重建）/ForwardMessages/PeerResolver 注入（bot 账号 peer 查询表由引擎注入）；MediaRef 增 FileName 字段。
+- 开发修正：TestSplitLongTextPrefersEntityBoundary 数据错误（实体终点 2800 > limit 2000 非合法切点，与实现语义矛盾）→ 改用 [1000,1800) 实体验证「优先在实体终点切」。
+- 补查：9eae8d8（T3.3）CI success；8179d5f（纯 docs）CI failure 疑 transient（代码树与 success 的 1ec30c5 相同），留待下会话确认。
+- **收工**：交接文档 docs/HANDOFF.md（进度/下一步 T3.5/环境工作流/纪律/尾部状态）；task_plan/progress 同步；下一会话从 HANDOFF + progress 尾部恢复。
