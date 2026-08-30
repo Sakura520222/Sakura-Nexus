@@ -241,3 +241,9 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 开发修正：TestSplitLongTextPrefersEntityBoundary 数据错误（实体终点 2800 > limit 2000 非合法切点，与实现语义矛盾）→ 改用 [1000,1800) 实体验证「优先在实体终点切」。
 - 补查：9eae8d8（T3.3）CI success；8179d5f（纯 docs）CI failure 疑 transient（代码树与 success 的 1ec30c5 相同），留待下会话确认。
 - **收工**：交接文档 docs/HANDOFF.md（进度/下一步 T3.5/环境工作流/纪律/尾部状态）；task_plan/progress 同步；下一会话从 HANDOFF + progress 尾部恢复。
+
+## 2026-08-29 · 会话 1（终续）：8179d5f 红定位 + 迁移竞态修复
+
+- 补查发现 8179d5f（纯 docs commit）CI 真红：integration 全部瞬败（missing zero version migration）。同代码的 1ec30c5 success → 判定**跨包并发竞态**：mysql 包 TestMigrateFullCycle（DownTo 删表）与 config 包集成测试（MigrateUp 建表）并行共享同一库，版本表半途状态被并发读取。
+- 修复（634416b，CI 监控中）：①MigrateUp/migrateDownTo 统一经 MySQL 命名锁（GET_LOCK 'sakura_migration_lock'，30s 等待）全局串行——消除 Up/Down 并发；②TestMigrateFullCycle 改用**独立临时库**（CREATE DATABASE sakura_test_cycle_<nano>，CI root 可用，完整 Down→Up×2→14 表断言→DROP；本地 test_user 无权限自动退化共享库幂等验证）；③migrateDownTo 保留在 integration 测试文件（生产文件无 unused）。
+- 收工状态更新：docs/HANDOFF.md 已同步（T3.4 CI 绿、竞态修复记录、下会话确认项 = 634416b CI 绿）。

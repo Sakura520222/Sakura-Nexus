@@ -17,7 +17,7 @@
 |---|---|
 | Phase 1 Telegram 风险验证 | ✅ **GATE-1 PASS + SEALED**（T1.0–T1.3；16 实时 + 346 重启补齐冒烟实证） |
 | Phase 2 生命周期+存储/配置 | ✅ T2.0 lifecycle / T2.1 0002 迁移 / T2.2 Database / T2.3 settings 中心 / T2.4 repositories（全部 CI 绿） |
-| Phase 3 转发引擎 | 🔄 T3.1 outbound domain ✅ / T3.2 过滤链 ✅ / T3.3 AlbumAggregator ✅ / **T3.4 Outbound MTProto ✅（刚推送，CI 监控中）** |
+| Phase 3 转发引擎 | 🔄 T3.1 outbound domain ✅ / T3.2 过滤链 ✅ / T3.3 AlbumAggregator ✅ / **T3.4 Outbound MTProto ✅（CI 已绿）** |
 | Phase 3 剩余 | **T3.5 engine 编排**（下一任务）→ T3.6 媒体临时文件 → T3.7 AI rewrite → T3.8 底栏 → T3.9 backfill → **GATE-2** |
 | Phase 4 | Rich 出站（T4.1 botapi → T4.2 renderer golden → T4.3 路由） |
 | Phase 5 | 服务接线 + WebUI（T5.1–T5.4）→ GATE-3 |
@@ -39,7 +39,7 @@
 
 ## 5. 本会话尾部状态
 
-- 提交至 `36da5fa`（T3.4，CI 监控中）；`9eae8d8`（T3.3）CI 已确认 success
+- 提交至 `634416b`（迁移竞态修复，CI 监控中）；T3.4 `36da5fa` CI 已确认 success；T3.3 `9eae8d8` success
 - 工作区干净（无未提交改动）
-- 曾报 `8179d5f`（纯 docs commit）CI failure——疑 transient（其代码树与 success 的 `1ec30c5` 相同），下一会话开跑时先确认，若真红需定位
+- `8179d5f` 红已定位并修复：**迁移跨包并发竞态**（mysql 包 TestMigrateFullCycle 的 DownTo 与 config 包 MigrateUp 并行踩版本表 → missing zero version migration；同代码两次 run 一绿一红证实是时序竞态，非 transient）。修复：MigrateUp/DownTo 经 MySQL 命名锁（GET_LOCK 'sakura_migration_lock'）全局串行 + TestMigrateFullCycle 改用独立临时库（CI root 走完整 Down→Up 验证；本地 test_user 无 CREATE 权限自动退化幂等验证）。下一会话开跑先确认 634416b CI 绿
 - 记忆已持久化：`design-approval-required` / `push-self-authorized` / `sakura-bot-rewrite-goal`（C:\Users\Firefly\.claude\projects\d--Project-Sakura-Bot\memory\）
