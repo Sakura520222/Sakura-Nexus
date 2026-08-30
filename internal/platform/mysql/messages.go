@@ -21,11 +21,11 @@ import (
 //     embedding_state='delete_pending' + revision(delete)——事务内不调用任何
 //     外部系统（R3.1.1 durability ≠ queue delivery）；重复 Delete 幂等
 type MessageRepository struct {
-	db *sqlx.DB
+	db *Database
 }
 
 func NewMessageRepository(db *sqlx.DB) *MessageRepository {
-	return &MessageRepository{db: db}
+	return &MessageRepository{db: WrapDatabase(db, nil)}
 }
 
 type msgRow struct {
@@ -69,16 +69,22 @@ func (r *MessageRepository) WriteNew(ctx context.Context, m domain.ChannelMessag
 		return false, nil // 幂等吸收（重复更新/补抓）
 	}
 
-	tx, err := r.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("开启事务: %w", err)
+	err = r.db.WithTx(ctx, func(tx *sqlx.Tx) error {
+		return r.insertNew(ctx, tx, m)
+	})
+	if errors.Is(err, errAlreadyExists) {
+		return false, nil // 幂等吸收
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
+// errAlreadyExists 表示唯一键已存在（ON DUPLICATE 吞并），New 被幂等吸收。
+var errAlreadyExists = errors.New("canonical message already exists")
+
+func (r *MessageRepository) insertNew(ctx context.Context, tx *sqlx.Tx, m domain.ChannelMessage) error {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO messages
 			(chat_type, chat_id, message_id, source_type, thread_top_id,
@@ -91,25 +97,22 @@ func (r *MessageRepository) WriteNew(ctx context.Context, m domain.ChannelMessag
 		nullInt64(m.SenderUserID), m.SenderUsername, m.SenderDisplayName,
 		m.Text, mediaJSON(m.Media), m.PublishedAt.UTC(), timePtrUTC(m.EditedAt))
 	if err != nil {
-		return false, fmt.Errorf("插入 canonical message: %w", err)
+		return fmt.Errorf("插入 canonical message: %w", err)
 	}
 	id, _ := res.LastInsertId()
-	// ON DUPLICATE 吞并并发竞态：影响行数为 0 表示已存在，跳过 revision
+	// ON DUPLICATE 吞并并发竞态：影响行数为 0 表示已存在，跳过 revision——
+	// 返回哨兵错误让外层区分"已存在吸收"与"新建成功"
 	if n, _ := res.RowsAffected(); n == 0 {
-		err = nil
-		return false, nil
+		return errAlreadyExists
 	}
 
-	if _, err = tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO message_revisions (message_id, revision, event_type, text, media, edited_at)
 		VALUES (?, 0, 'create', ?, ?, NULL)`,
 		id, m.Text, mediaJSON(m.Media)); err != nil {
-		return false, fmt.Errorf("插入 create revision: %w", err)
+		return fmt.Errorf("插入 create revision: %w", err)
 	}
-	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("提交事务: %w", err)
-	}
-	return true, nil
+	return nil
 }
 
 // WriteEdit 记录编辑修订；未见过的消息以当前内容按 New 入库（canonical 完整性）。
@@ -123,33 +126,22 @@ func (r *MessageRepository) WriteEdit(ctx context.Context, m domain.ChannelMessa
 		return err
 	}
 
-	tx, err := r.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("开启事务: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
+	return r.db.WithTx(ctx, func(tx *sqlx.Tx) error {
+		newRev := row.CurrentRevision + 1
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE messages SET text = ?, media = ?, edited_at = ?, current_revision = ?
+			WHERE id = ?`,
+			m.Text, mediaJSON(m.Media), timePtrUTC(m.EditedAt), newRev, row.ID); err != nil {
+			return fmt.Errorf("更新 canonical message: %w", err)
 		}
-	}()
-
-	newRev := row.CurrentRevision + 1
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE messages SET text = ?, media = ?, edited_at = ?, current_revision = ?
-		WHERE id = ?`,
-		m.Text, mediaJSON(m.Media), timePtrUTC(m.EditedAt), newRev, row.ID); err != nil {
-		return fmt.Errorf("更新 canonical message: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO message_revisions (message_id, revision, event_type, text, media, edited_at)
-		VALUES (?, ?, 'edit', ?, ?, ?)`,
-		row.ID, newRev, m.Text, mediaJSON(m.Media), timePtrUTC(m.EditedAt)); err != nil {
-		return fmt.Errorf("插入 edit revision: %w", err)
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("提交事务: %w", err)
-	}
-	return nil
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO message_revisions (message_id, revision, event_type, text, media, edited_at)
+			VALUES (?, ?, 'edit', ?, ?, ?)`,
+			row.ID, newRev, m.Text, mediaJSON(m.Media), timePtrUTC(m.EditedAt)); err != nil {
+			return fmt.Errorf("插入 edit revision: %w", err)
+		}
+		return nil
+	})
 }
 
 // WriteDelete 事务化删除状态机（02 §2.3）：未见过/已删除均幂等返回。
@@ -162,33 +154,22 @@ func (r *MessageRepository) WriteDelete(ctx context.Context, ref domain.MessageR
 		return nil
 	}
 
-	tx, err := r.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("开启事务: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
+	return r.db.WithTx(ctx, func(tx *sqlx.Tx) error {
+		newRev := row.CurrentRevision + 1
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE messages
+			SET deleted_at = NOW(6), current_revision = ?, embedding_state = 'delete_pending'
+			WHERE id = ? AND deleted_at IS NULL`,
+			newRev, row.ID); err != nil {
+			return fmt.Errorf("更新删除状态: %w", err)
 		}
-	}()
-
-	newRev := row.CurrentRevision + 1
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE messages
-		SET deleted_at = NOW(6), current_revision = ?, embedding_state = 'delete_pending'
-		WHERE id = ? AND deleted_at IS NULL`,
-		newRev, row.ID); err != nil {
-		return fmt.Errorf("更新删除状态: %w", err)
-	}
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO message_revisions (message_id, revision, event_type)
-		VALUES (?, ?, 'delete')`, row.ID, newRev); err != nil {
-		return fmt.Errorf("插入 delete revision: %w", err)
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("提交事务: %w", err)
-	}
-	return nil
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO message_revisions (message_id, revision, event_type)
+			VALUES (?, ?, 'delete')`, row.ID, newRev); err != nil {
+			return fmt.Errorf("插入 delete revision: %w", err)
+		}
+		return nil
+	})
 }
 
 func sourceTypeOrDefault(s string) string {
