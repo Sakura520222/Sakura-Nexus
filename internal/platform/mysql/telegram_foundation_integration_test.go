@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gotd/td/session"
 	"github.com/jmoiron/sqlx"
@@ -63,21 +64,54 @@ func atoiDefault(s string, def int) int {
 	return n
 }
 
-// TestMigrateFullCycle：migration runner 专项测试——Down 到 0（清空全部表与
-// 版本记录）后 Up×2，在长期存在的库上也能验证「0001 从空库构建成功」+ 幂等。
-// 本测试是唯一允许操作 schema 版本的测试，必须用 raw testDB。
+// TestMigrateFullCycle：migration runner 专项测试——优先在**独立临时库**上验证
+// 「0001 从空库构建成功」+ 幂等（2026-08-30 竞态修复：此前在共享库 DownTo 会与
+// config 包并行测试的 MigrateUp 互相踩——missing zero version migration）。
+// 无 CREATE DATABASE 权限时退化为共享库幂等验证（不动 Down）。
 func TestMigrateFullCycle(t *testing.T) {
 	db, ctx := testDB(t)
 
-	if err := migrateDownTo(ctx, db.DB, 0); err != nil {
-		t.Fatalf("DownTo(0): %v", err)
+	cycleDB := fmt.Sprintf("sakura_test_cycle_%d", time.Now().UnixNano())
+	if _, err := db.ExecContext(ctx, "CREATE DATABASE "+cycleDB+" CHARACTER SET utf8mb4"); err != nil {
+		t.Logf("无 CREATE DATABASE 权限（%v）——退化为共享库 Up×2 幂等验证（跳过 Down）", err)
+		for i := 1; i <= 2; i++ {
+			if err := MigrateUp(ctx, db.DB); err != nil {
+				t.Fatalf("第 %d 次 MigrateUp: %v", i, err)
+			}
+		}
+		assertTables(t, db, ctx)
+		return
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+cycleDB)
+	})
+
+	// 建临时库连接（权限同主连接；独立 database 与其他测试完全隔离）
+	cycle, err := Connect(ctx, Options{
+		Host:     os.Getenv("SAKURA_TEST_MYSQL_HOST"),
+		Port:     atoiDefault(os.Getenv("SAKURA_TEST_MYSQL_PORT"), 3306),
+		User:     os.Getenv("SAKURA_TEST_MYSQL_USER"),
+		Password: os.Getenv("SAKURA_TEST_MYSQL_PASSWORD"),
+		Database: cycleDB,
+	})
+	if err != nil {
+		t.Fatalf("连接临时库: %v", err)
+	}
+	t.Cleanup(func() { cycle.Close() })
+
+	if err := migrateDownTo(ctx, cycle.DB, 0); err != nil {
+		t.Fatalf("DownTo(0)（空库应无操作）: %v", err)
 	}
 	for i := 1; i <= 2; i++ {
-		if err := MigrateUp(ctx, db.DB); err != nil {
+		if err := MigrateUp(ctx, cycle.DB); err != nil {
 			t.Fatalf("第 %d 次 MigrateUp: %v", i, err)
 		}
 	}
+	assertTables(t, cycle, ctx)
+}
 
+func assertTables(t *testing.T, db *sqlx.DB, ctx context.Context) {
+	t.Helper()
 	// 0001 七张 + 0002 七张（T2.1：空库 Up 自动顺序升级到最新）
 	for _, table := range []string{
 		"gotd_sessions", "telegram_update_states", "telegram_channel_states",
@@ -135,13 +169,16 @@ func TestSessionStorageRoundtrip(t *testing.T) {
 
 // migrateDownTo 回退 schema 到指定版本——仅测试使用（TestMigrateFullCycle 的
 // fresh-schema 保证）。生产 API 不暴露回滚入口（06 §2：升级只加不改，永不 Down）。
+// 与 MigrateUp 共用同一把命名锁（migrate.go），防止跨包并发竞态。
 func migrateDownTo(ctx context.Context, db *sql.DB, version int64) error {
-	provider, err := goose.NewProvider(goose.DialectMySQL, db, migrations.FS)
-	if err != nil {
-		return fmt.Errorf("goose provider 构造失败: %w", err)
-	}
-	if _, err := provider.DownTo(ctx, version); err != nil {
-		return fmt.Errorf("goose downTo(%d) 失败: %w", version, err)
-	}
-	return nil
+	return withMigrationLock(ctx, db, func(conn *sql.Conn) error {
+		provider, err := goose.NewProvider(goose.DialectMySQL, db, migrations.FS)
+		if err != nil {
+			return fmt.Errorf("goose provider 构造失败: %w", err)
+		}
+		if _, err := provider.DownTo(ctx, version); err != nil {
+			return fmt.Errorf("goose downTo(%d) 失败: %w", version, err)
+		}
+		return nil
+	})
 }
