@@ -19,7 +19,7 @@ import (
 // TestStateStorageContract：T1.3 验证项——gotd StateStorage 全接口往返
 // （GetState found/not found、SetState upsert、部分更新要求行存在、channel PTS、ForEach）。
 func TestStateStorageContract(t *testing.T) {
-	db, ctx := testDB(t)
+	db, ctx := testMigratedDB(t)
 	const uid int64 = 900001
 	st := NewStateStorage(db, "itest")
 	t.Cleanup(func() {
@@ -88,7 +88,7 @@ func TestStateStorageContract(t *testing.T) {
 // TestPeerStorageContract：T1.3 验证项——contrib PeerStorage 接口往返
 // （Add/Find、Assign/Resolve 归一化、Iterate、not found）。
 func TestPeerStorageContract(t *testing.T) {
-	db, ctx := testDB(t)
+	db, ctx := testMigratedDB(t)
 	ps := NewPeerStorage(db, "itest")
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(ctx, "DELETE FROM telegram_peers WHERE account='itest'")
@@ -165,7 +165,7 @@ func testMsg(id int64, text string) domain.ChannelMessage {
 // TestMessageRepositoryProtocol：T1.3 验证项——canonical 写入协议
 // （New 幂等吸收 / Edit revision / Delete 事务化状态机 / revisions 事件序列）。
 func TestMessageRepositoryProtocol(t *testing.T) {
-	db, ctx := testDB(t)
+	db, ctx := testMigratedDB(t)
 	repo := NewMessageRepository(db)
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(ctx, `

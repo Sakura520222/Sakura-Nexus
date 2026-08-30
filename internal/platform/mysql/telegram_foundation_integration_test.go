@@ -14,6 +14,7 @@ import (
 )
 
 // testDB 返回连向 SAKURA_TEST_MYSQL_* 的池；未配置时跳过（T0.2 约定）。
+// 只负责 raw 连接——不保证 schema 存在。
 func testDB(t *testing.T) (*sqlx.DB, context.Context) {
 	t.Helper()
 	if os.Getenv("SAKURA_TEST_MYSQL_HOST") == "" {
@@ -34,6 +35,18 @@ func testDB(t *testing.T) (*sqlx.DB, context.Context) {
 	return db, ctx
 }
 
+// testMigratedDB 是业务表契约测试的 fixture：连接 + MigrateUp，
+// 自带 schema 保证——**任何测试都不得依赖其他测试先跑迁移**
+// （2026-08-29 CI 教训：CI 空库上 t13 契约先于迁移测试执行而失败）。
+func testMigratedDB(t *testing.T) (*sqlx.DB, context.Context) {
+	t.Helper()
+	db, ctx := testDB(t)
+	if err := MigrateUp(ctx, db.DB); err != nil {
+		t.Fatalf("fixture 迁移: %v", err)
+	}
+	return db, ctx
+}
+
 func atoiDefault(s string, def int) int {
 	if s == "" {
 		return def
@@ -45,10 +58,15 @@ func atoiDefault(s string, def int) int {
 	return n
 }
 
-// TestMigrateIdempotent：T1.1 验证项——同一 runner 连续 Up 幂等，七表齐备。
-func TestMigrateIdempotent(t *testing.T) {
+// TestMigrateFullCycle：migration runner 专项测试——Down 到 0（清空全部表与
+// 版本记录）后 Up×2，在长期存在的库上也能验证「0001 从空库构建成功」+ 幂等。
+// 本测试是唯一允许操作 schema 版本的测试，必须用 raw testDB。
+func TestMigrateFullCycle(t *testing.T) {
 	db, ctx := testDB(t)
 
+	if err := MigrateDownTo(ctx, db.DB, 0); err != nil {
+		t.Fatalf("DownTo(0): %v", err)
+	}
 	for i := 1; i <= 2; i++ {
 		if err := MigrateUp(ctx, db.DB); err != nil {
 			t.Fatalf("第 %d 次 MigrateUp: %v", i, err)
@@ -71,7 +89,7 @@ func TestMigrateIdempotent(t *testing.T) {
 // TestSessionStorageRoundtrip：T1.1 验证项——Load 未找到返回 session.ErrNotFound；
 // Store 后 Load 返回原字节；重复 Store 为 upsert 覆盖（02 §2.1 写语义）。
 func TestSessionStorageRoundtrip(t *testing.T) {
-	db, ctx := testDB(t)
+	db, ctx := testMigratedDB(t)
 	storage := NewSessionStorage(db, "itest")
 	t.Cleanup(func() {
 		if _, err := db.ExecContext(ctx, "DELETE FROM gotd_sessions WHERE account = 'itest'"); err != nil {
