@@ -218,3 +218,11 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - T2.2（本 commit）：internal/platform/mysql/database.go——WithTx（fn 错误/panic 均回滚、Commit 失败状态未知不重放）+ RetryIdempotent（isTransient 判定 2006/2013/ErrInvalidConn/driver.ErrBadConn，仅幂等操作重试一次）；MessageRepository 三方法切统一事务路径，顺修原实现 panic 不回滚的连接悬挂问题；集成测试覆盖提交/回滚/panic 回滚/重试语义。
 - 流程：push 授权生效后自主 push + gh CLI 监控 CI 终态（T2.0/refactor/T2.1 三连绿）。
 - 下一步：T2.3 settings 中心（P0 scopes typed struct + 快照 + 热更回调）。
+
+## 2026-08-29 · 会话 1（续）：T2.3/T2.4 完成并 push（Phase 2 收尾）
+
+- T2.3（4cb97b6）：internal/config/settings.go——P0 四 scope（system/forwarding/logging/ai）typed struct + Validate + 默认值 + Load 全量快照 + Update 字段级合并（partial→副本→校验→写库→快照原子替换→订阅回调，拒绝时不污染快照）；ai scope P0 字段（base_url/api_key/rewrite_model/temperature/timeout）即存在，api_key 注明 secret 写-only。集成测试：默认值/合并+回调+持久化/六类非法值拒绝。
+- T2.4（a5fe7f3）：domain（Channel/ForwardRule/AuditEntry）+ ChannelRepo（tg_id upsert）/ForwardRuleRepo（CRUD+AdvanceCursor GREATEST 只进不退）/ForwardedRepo（五列去重 Exists/INSERT IGNORE Record/CleanupBefore/IncrStats）/AuditRepo。集成测试四组全过。
+- 过程修正两个真 bug（集成测试抓出）：①IncrStats 首次插入计 0 丢计数（INSERT VALUES 硬编码 0 首次不走 duplicate 分支）→ 改 VALUES 参数化 + duplicate 增量；②SELECT * 缺 created_at/updated_at 映射（python 补丁因 gofmt 对齐静默未命中，Edit 精确修复）。
+- CI 流程：T2.0/9a3ce66/T2.1/T2.2 四连绿（gh CLI 监控）；T2.3+T2.4 push 后监控中。
+- Phase 2 进度：T2.0✅ T2.1✅ T2.2✅ T2.3✅ T2.4✅（commit 层面；CI 待绿）→ 下一阶段 Phase 3 转发引擎（T3.1 outbound domain 补全起）。
