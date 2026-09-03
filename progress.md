@@ -259,3 +259,12 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
   - 关闭语义：ctx 取消→消费者完成当前任务（记账走 WithoutCancel ctx）后退出，队列剩余丢弃——消息 unresolved、cursor 未越过，backfill 恢复（与 §6 durability 一致）；consumeLoop 拉取后补 ctx 检查消除 select 双就绪随机性。
   - ForwardedRepo.ExistsByContent + 集成测试；engine 全链 fake 单测 24 例（背压阻塞/延迟边界/热更/相册全成员 dedup/迟到成员独立组/forward 模式/媒体临时文件即删/关闭丢弃等）。
 - **下一步**：T3.6 媒体临时文件（U 部分可做；S 冒烟待 .env 迁移）→ T3.7 AI rewrite → T3.8 底栏 → T3.9 backfill → GATE-2。
+
+## 2026-09-03 · 会话 2（续）：T3.6–T3.9 连发，Phase 3 U 部分全部完成
+
+- **T3.6**（7e2568a，CI success）：MediaDownloader（get_messages 取新鲜引用构 location——domain.MediaRef 不含 ID/AccessHash 且 fileref 会过期，恒取新鲜即天然规避 FILEREF_INVALID，流式中途失效再重取一次）；limitedWriter 硬限流→domain.ErrMediaTooLarge（engine 内建 permanent 哨兵）；下载器回传刷新后 MediaRef（photo 真实尺寸/文件名）供上传保真；engine 声明尺寸预检+启动清理 fwd-* 残留+tmp 默认 sakura-nexus/ 子目录；settings.media_max_size_mb（默认 2048）+ MEDIA_TMP_DIR 可选 env；convertMedia 补 FileName。**设计偏差备案（§1.5）**：不再「写回 messages.media」——恒取新鲜引用使持久化 fileref 失去必要性（写回仅剩展示用途）。
+- **T3.7**（27f5c4d，CI success）：platform/ai.Provider（openai-go v1.12；**SDK 内置重试 WithMaxRetries(0) 关闭**防双层重试；429/5xx 指数退避+jitter×3、4xx 即败；fake RoundTripper 单测）；engine Rewriter 消费接口（ai_enabled+copy 模式；失败降级原文不计失败；改写文本不带原 entities；forward 模式跳过）。
+- **T3.8**（b3a97e3，CI success）：底栏 footer.go 纯函数（七占位符、公开 username/私有 t.me/c/{裸id} 链接、未知占位符原样保留、@username→title 回落）+ engine 追加（custom_footer 优先不受全局开关影响 > show_default_footer 默认模板 {source_link}（设计未定文案，最小可用，备案）> 无；\n\n 分隔；forward 模式不适用；相册 message_id 取最小）。EngineDeps.AssistantBot 占位符注入。
+- **T3.9**（ee721b1，CI 监控中）：Backfill——minID 取当前 contiguous cursor（内存 tracker 为准），GetHistory(minID, ≤200) 升序经 HandleNew 同一入口（相册聚合复用）；drain 沉降语义（enqueued/settled 双计数器消除「取任务/置忙」间隙竞态 + FlushAll 强制冲刷暂存组——历史回放不等静默窗口）；platform/telegram.History 实现 forwarding.HistoryFetcher；**§6 恢复用例端到端**（100 三连败→101/102 成功 cursor 停 99→backfill 重拉→100 成功→连续推进 102）；修复 fakeForwarded 失真（Record 未模拟 INSERT 使 Exists 命中——测试替身教训）。
+- **测试替身语义修正**：fakeForwarded.Record 现在写入 exists 映射（对齐真实 INSERT IGNORE 行为）。
+- **下一阻塞点**：GATE-2（smoke-forward 端到端：文本/媒体/相册+全成员 dedup 查库）需真实 .env（TELEGRAM_BOT_TOKEN/API_ID/HASH）——**本机未迁移生产 .env，等用户提供后执行**；之后 Phase 4 Rich 出站。
