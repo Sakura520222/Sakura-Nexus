@@ -1163,3 +1163,130 @@ func TestEngineStartupCleansStaleTempDirs(t *testing.T) {
 		t.Errorf("非 fwd-* 目录不应被清理: %v", err)
 	}
 }
+
+// ---------- T3.7：AI 改写 ----------
+
+type fakeRewriter struct {
+	mu    sync.Mutex
+	calls int
+	rule  domain.ForwardRule
+	view  FilterView
+	resp  domain.AIResponse
+	err   error
+}
+
+var _ Rewriter = (*fakeRewriter)(nil)
+
+func (f *fakeRewriter) Rewrite(_ context.Context, rule domain.ForwardRule, view FilterView) (domain.AIResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.rule, f.view = rule, view
+	return f.resp, f.err
+}
+
+func (f *fakeRewriter) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func aiRule(id, srcID, dstID int64) domain.ForwardRule {
+	r := rule(id, srcID, dstID)
+	r.AIEnabled = true
+	r.AIPrompt = "改写得更抓眼球"
+	return r
+}
+
+// 改写成功：发送文本为改写结果；原 entities 不再适用（改写文本无实体映射）。
+func TestEngineAIRewriteRewritesText(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	rw := &fakeRewriter{resp: domain.AIResponse{Text: "改写后的标题党"}}
+	e, _ := newTestEngine(t, []domain.ForwardRule{aiRule(1, 100, 200)}, snd, dedup, nil, nil)
+	e.deps.Rewriter = rw
+	startEngine(t, e)
+
+	m := textMsg(100, 21, "平平无奇的原文")
+	m.Entities = []domain.Entity{{Type: "bold", Offset: 0, Length: 5}}
+	e.HandleNew(context.Background(), m)
+	waitSignal(t, dedup.recorded, "改写转发完成")
+
+	calls := snd.textCalls()
+	if len(calls) != 1 || calls[0].Text != "改写后的标题党" {
+		t.Fatalf("应发送改写文本: %+v", calls)
+	}
+	if len(calls[0].Entities) != 0 {
+		t.Errorf("改写文本不应携带原 entities: %+v", calls[0].Entities)
+	}
+	if rw.callCount() != 1 {
+		t.Fatalf("改写应恰好调用一次，实际 %d", rw.callCount())
+	}
+	if rw.view.AggregateText != "平平无奇的原文" || rw.rule.ID != 1 {
+		t.Errorf("改写入参不符: %+v", rw.view)
+	}
+	if rw.rule.AIPrompt != "改写得更抓眼球" {
+		t.Errorf("规则应透传给 rewriter: %+v", rw.rule)
+	}
+}
+
+// 改写失败 → 降级原文（03 §1.4：不是任务失败），原文与 entities 保留。
+func TestEngineAIRewriteFailureFallsBackToOriginal(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	rw := &fakeRewriter{err: errors.New("ai down")}
+	e, store := newTestEngine(t, []domain.ForwardRule{aiRule(1, 100, 200)}, snd, dedup, nil, nil)
+	e.deps.Rewriter = rw
+	startEngine(t, e)
+
+	m := textMsg(100, 22, "降级保原文")
+	m.Entities = []domain.Entity{{Type: "italic", Offset: 0, Length: 2}}
+	e.HandleNew(context.Background(), m)
+	waitSignal(t, store.advanced, "降级转发推进")
+
+	calls := snd.textCalls()
+	if len(calls) != 1 || calls[0].Text != "降级保原文" {
+		t.Fatalf("降级应发送原文: %+v", calls)
+	}
+	if len(calls[0].Entities) != 1 {
+		t.Errorf("降级应保留原 entities: %+v", calls[0].Entities)
+	}
+	stats := dedup.statList()
+	if len(stats) != 1 || !stats[0].forwarded {
+		t.Errorf("降级成功应计成功: %+v", stats)
+	}
+}
+
+// forward 模式不适用改写（原样转发语义，03 §3.3 ③）。
+func TestEngineAIRewriteSkippedInForwardMode(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	rw := &fakeRewriter{resp: domain.AIResponse{Text: "不应出现"}}
+	r := aiRule(1, 100, 200)
+	r.CopyMode = "forward"
+	e, _ := newTestEngine(t, []domain.ForwardRule{r}, snd, dedup, nil, nil)
+	e.deps.Rewriter = rw
+	startEngine(t, e)
+
+	e.HandleNew(context.Background(), mediaMsg(100, 23, "x", "photo"))
+	waitSignal(t, dedup.recorded, "forward 完成")
+
+	if rw.callCount() != 0 {
+		t.Error("forward 模式不应调用改写")
+	}
+	if len(snd.forwardCalls()) != 1 {
+		t.Error("应走 ForwardMessages")
+	}
+}
+
+// Rewriter 未注入（T3.7 早期接线可缺省）→ 原文直发。
+func TestEngineAIRewriteNilRewriterUsesOriginal(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	e, _ := newTestEngine(t, []domain.ForwardRule{aiRule(1, 100, 200)}, snd, dedup, nil, nil)
+	startEngine(t, e)
+
+	e.HandleNew(context.Background(), textMsg(100, 24, "无 rewriter"))
+	waitSignal(t, dedup.recorded, "直发完成")
+
+	calls := snd.textCalls()
+	if len(calls) != 1 || calls[0].Text != "无 rewriter" {
+		t.Fatalf("应原文直发: %+v", calls)
+	}
+}

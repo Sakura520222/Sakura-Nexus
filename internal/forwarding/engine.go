@@ -54,6 +54,13 @@ type ChannelSource interface {
 	Get(ctx context.Context, tgID int64) (domain.Channel, bool, error)
 }
 
+// Rewriter 是 AI 改写最小接口（03 §3.2 ⑧；实现由接线方以 platform/ai.Provider
+// 适配——prompt 取 rule.AIPrompt，模型/端点经 settings.ai 配置）。
+// 引擎语义：改写失败 → 降级原文（03 §1.4），不是任务失败。
+type Rewriter interface {
+	Rewrite(ctx context.Context, rule domain.ForwardRule, view FilterView) (domain.AIResponse, error)
+}
+
 // SendFailureKind 是发送失败的引擎侧分类（§1.4 矩阵 + P0 Plan §6 cursor 语义）。
 type SendFailureKind int
 
@@ -115,7 +122,9 @@ type sendTask struct {
 	rule        domain.ForwardRule
 	msgs        []domain.ChannelMessage
 	view        FilterView
-	contentHash string // AggregateText 的 sha256 hex（Record 携带；content_dedup 比对）
+	text        string          // 发送文本（初始=聚合文本；AI 改写后覆盖）
+	entities    []domain.Entity // 随文本的实体（改写后为空）
+	contentHash string          // AggregateText 的 sha256 hex（Record 携带；content_dedup 比对）
 }
 
 // EngineDeps 是引擎装配依赖（app 接线层构造注入）。
@@ -125,9 +134,10 @@ type EngineDeps struct {
 	Sender       Sender
 	Media        MediaDownloader // 可选；nil 时 copy 模式媒体消息记 error 跳过（T3.6 前置）
 	Channels     ChannelSource   // 可选；nil 时规则 username 辅助列不参与匹配
+	Rewriter     Rewriter        // 可选；nil 时 ai_enabled 规则直发原文（03 §3.2 ⑧）
 	Classify     FailureClassifier
 	RandomSource func() float64 // 可选；nil = math/rand 全局源
-	TmpDir       string         // 媒体临时文件根目录；"" = os.TempDir()（T3.6 完善生命周期）
+	TmpDir       string         // 媒体临时文件根目录；"" = 系统临时目录 sakura-nexus/（03 §3.9）
 	Log          *slog.Logger
 }
 
@@ -396,20 +406,28 @@ func (e *Engine) processRule(ctx context.Context, rule domain.ForwardRule, msgs 
 	}
 
 	// 入队（容量 100 阻塞背压；ctx 取消则放弃，消息保持 unresolved）
+	task := &sendTask{
+		rule: rule, msgs: msgs, view: view,
+		text:        view.AggregateText,
+		entities:    msgs[0].Entities,
+		contentHash: hash,
+	}
 	select {
-	case e.queue <- &sendTask{rule: rule, msgs: msgs, view: view, contentHash: hash}:
+	case e.queue <- task:
 	case <-ctx.Done():
 		e.log.Warn("入队前 ctx 取消，消息保持未转发", "rule", rule.ID, "msg", msgs[0].Ref.MessageID)
 	}
 }
 
-// execute 是消费者侧执行：随机延迟 → 发送（重试矩阵）→ Record/统计/cursor。
-// 发送结局后的记账用不可取消 ctx（WithoutCancel）——已发生的发送必须完成记录。
+// execute 是消费者侧执行：随机延迟 → AI 改写（失败降级原文）→ 发送（重试矩阵）
+// → Record/统计/cursor。发送结局后的记账用不可取消 ctx（WithoutCancel）。
 func (e *Engine) execute(ctx context.Context, t *sendTask) {
 	// 每规则随机延迟（03 §3.4：uniform(delay_min, delay_max)，发送前入睡）
 	if !e.sleep(ctx, e.delayFor(t.rule)) {
 		return // ctx 取消：丢弃任务，unresolved 保持（backfill 恢复）
 	}
+
+	e.rewriteIfEnabled(ctx, t)
 
 	sent, err := e.sendWithRetry(ctx, t)
 	pctx := context.WithoutCancel(ctx)
@@ -444,6 +462,22 @@ func (e *Engine) execute(ctx context.Context, t *sendTask) {
 	e.finishTerminals(pctx, t.rule, t.msgs)
 }
 
+// rewriteIfEnabled 执行 AI 改写（03 §3.2 ⑧：仅 ai_enabled 且 copy 模式）。
+// 改写失败 → 降级原文（03 §1.4）——不算任务失败；改写文本不携带原 entities。
+func (e *Engine) rewriteIfEnabled(ctx context.Context, t *sendTask) {
+	if !t.rule.AIEnabled || e.deps.Rewriter == nil || t.rule.CopyMode == "forward" {
+		return
+	}
+	resp, err := e.deps.Rewriter.Rewrite(ctx, t.rule, t.view)
+	if err != nil {
+		e.log.Warn("AI 改写失败，降级原文", "rule", t.rule.ID, "msg", t.msgs[0].Ref.MessageID, "err", err)
+		return
+	}
+	if resp.Text != "" {
+		t.text, t.entities = resp.Text, nil
+	}
+}
+
 // sendWithRetry 按 §1.4 矩阵执行发送：transient 重试（指数退避，上限 3 次尝试）；
 // permanent 单次尝试即返回。ctx 取消时中止并返回 ctx 错误。
 func (e *Engine) sendWithRetry(ctx context.Context, t *sendTask) (domain.SentMessage, error) {
@@ -476,15 +510,15 @@ func (e *Engine) sendOnce(ctx context.Context, t *sendTask) (domain.SentMessage,
 	default:
 		return e.deps.Sender.SendText(ctx, domain.SendRequest{
 			Chat:     t.rule.Target,
-			Text:     t.view.AggregateText,
-			Entities: t.msgs[0].Entities, // 转发复制：原 entities 透传
+			Text:     t.text,
+			Entities: t.entities, // 转发复制：原 entities 透传（改写后为空）
 		})
 	}
 }
 
 // sendAsFiles 下载媒体到任务级临时目录并发送；目录随任务结束即删（03 §3.9 即时删除）。
 // 下载前按声明尺寸预检上限；下载器回传刷新后的元数据（真实尺寸/文件名）供上传使用。
-// T3.7/T3.8 的 AI 改写与底栏将在此处的 caption 构造点接入（改写后文本 + 底栏）。
+// T3.8 底栏将在此处的 caption 构造点接入（当前 = 改写后文本）。
 func (e *Engine) sendAsFiles(ctx context.Context, t *sendTask) (domain.SentMessage, error) {
 	if e.deps.Media == nil {
 		return domain.SentMessage{}, fmt.Errorf("媒体下载器未接入（T3.6 前 copy 模式媒体消息不发送）")
@@ -517,8 +551,8 @@ func (e *Engine) sendAsFiles(ctx context.Context, t *sendTask) (domain.SentMessa
 	}
 	return e.deps.Sender.SendFiles(ctx, domain.SendRequest{
 		Chat:     t.rule.Target,
-		Caption:  t.view.AggregateText,
-		Entities: t.msgs[0].Entities, // caption 实体随首成员
+		Caption:  t.text,
+		Entities: t.entities, // caption 实体随首成员（改写后为空）
 	}, files)
 }
 
