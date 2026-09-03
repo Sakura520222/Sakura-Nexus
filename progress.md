@@ -247,3 +247,15 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - 补查发现 8179d5f（纯 docs commit）CI 真红：integration 全部瞬败（missing zero version migration）。同代码的 1ec30c5 success → 判定**跨包并发竞态**：mysql 包 TestMigrateFullCycle（DownTo 删表）与 config 包集成测试（MigrateUp 建表）并行共享同一库，版本表半途状态被并发读取。
 - 修复（634416b，CI 监控中）：①MigrateUp/migrateDownTo 统一经 MySQL 命名锁（GET_LOCK 'sakura_migration_lock'，30s 等待）全局串行——消除 Up/Down 并发；②TestMigrateFullCycle 改用**独立临时库**（CREATE DATABASE sakura_test_cycle_<nano>，CI root 可用，完整 Down→Up×2→14 表断言→DROP；本地 test_user 无权限自动退化共享库幂等验证）；③migrateDownTo 保留在 integration 测试文件（生产文件无 unused）。
 - 收工状态更新：docs/HANDOFF.md 已同步（T3.4 CI 绿、竞态修复记录、下会话确认项 = 634416b CI 绿）。
+
+## 2026-09-03 · 会话 2：开发机迁移（Windows→Linux）+ T3.5 转发引擎完成
+
+- **恢复前置确认**：634416b（迁移竞态修复）CI success；T3.4/T3.3/docs 全绿——上一会话遗留确认项闭合。
+- **环境迁移**（新 Linux 开发机 /home/firefly/Projects/Sakura-Nexus）：go1.27 + CGO=1（本地可跑 -race）；GOPROXY 设 goproxy.cn（默认代理被墙，`go env -w` 持久化）；golangci-lint 2.13.2 重装至 ~/go/bin；本机 docker mysql:8.4 容器（root）补建 test_db/test_user + 重建 .env.test.local（集成测试全绿）。**注意：.env（生产凭据）未迁移，S 类冒烟在本机暂不可跑**。
+- **T3.5 完成**（d85ee3d + 14a8895，CI 监控中）：
+  - refactor：telegram.LocalFile 上移 domain.LocalFile——Outbound 凭结构类型直接满足 forwarding.Sender（01 §2.3），免接线适配层。
+  - engine.go：事件入口（HandleNew，相册经 AlbumAggregator 分支）→ 多规则独立处理（MatchSource id 精确+username 辅助列，ChannelSource 可选注入+进程内缓存）→ 五列去重（相册任一成员命中→整组跳过）→ content_dedup（sha256 聚合文本，ExistsByContent 走 idx_fwd_hash；纯媒体空文本不比对）→ ShouldForward 过滤链 → 容量 100 阻塞背压队列 + 单消费者 + 每规则随机延迟（规则区间非法/未配置回落 settings 默认）→ §1.4 重试矩阵（transient 3 次尝试 1s/2s 退避；permanent 单次即 terminal 防卡死，分类器接线层注入）→ 真实成败统计（相册按一次发送计 1）。
+  - cursor.go：cursorTracker 纯逻辑——terminal 集合 + 最小 unresolved 阻挡 + 空洞不阻挡；§6 冻结场景端到端验证（100 失败/101、102 成功→cursor 停 99；100 恢复→连续推进 102）。
+  - 关闭语义：ctx 取消→消费者完成当前任务（记账走 WithoutCancel ctx）后退出，队列剩余丢弃——消息 unresolved、cursor 未越过，backfill 恢复（与 §6 durability 一致）；consumeLoop 拉取后补 ctx 检查消除 select 双就绪随机性。
+  - ForwardedRepo.ExistsByContent + 集成测试；engine 全链 fake 单测 24 例（背压阻塞/延迟边界/热更/相册全成员 dedup/迟到成员独立组/forward 模式/媒体临时文件即删/关闭丢弃等）。
+- **下一步**：T3.6 媒体临时文件（U 部分可做；S 冒烟待 .env 迁移）→ T3.7 AI rewrite → T3.8 底栏 → T3.9 backfill → GATE-2。
