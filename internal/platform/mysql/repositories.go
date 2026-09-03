@@ -280,6 +280,23 @@ func (r *ForwardedRepo) Exists(ctx context.Context, src domain.MessageRef, targe
 	return n > 0, nil
 }
 
+// ExistsByContent 按 content_hash 查同源同目标的重复内容（content_dedup 开启时
+// 的防删帖重发比对，03 §3.5；走 idx_fwd_hash）。
+func (r *ForwardedRepo) ExistsByContent(ctx context.Context, source, target domain.ChatRef,
+	contentHash string,
+) (bool, error) {
+	var n int
+	err := r.db.GetContext(ctx, &n, `
+		SELECT COUNT(*) FROM forwarded_messages
+		WHERE content_hash = ? AND source_chat_type = ? AND source_chat_id = ?
+			AND target_chat_type = ? AND target_chat_id = ?`,
+		contentHash, source.Kind.String(), source.ID, target.Kind.String(), target.ID)
+	if err != nil {
+		return false, fmt.Errorf("exists by content: %w", err)
+	}
+	return n > 0, nil
+}
+
 // Record 写入去重记录（INSERT IGNORE：相册全成员补记/重放天然幂等）。
 func (r *ForwardedRepo) Record(ctx context.Context, src domain.MessageRef, target domain.ChatRef,
 	ruleID int64, targetMessageID int64, contentHash string,

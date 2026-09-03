@@ -187,6 +187,48 @@ func TestForwardedRepoDedupAndStats(t *testing.T) {
 	})
 }
 
+// TestForwardedRepoContentDedup：content_hash 内容去重（防删帖重发，03 §3.5）——
+// 同源同目标同内容命中；不同源/不同目标/不同内容不命中。
+func TestForwardedRepoContentDedup(t *testing.T) {
+	db, ctx := testMigratedDB(t)
+	d := WrapDatabase(db, nil)
+	repo := NewForwardedRepo(db)
+	source := domain.NewChatRef(domain.PeerChannel, 1111)
+	target := domain.NewChatRef(domain.PeerChannel, 2222)
+
+	if exists, err := repo.ExistsByContent(ctx, source, target, "h1"); err != nil || exists {
+		t.Fatalf("初始不应命中: exists=%v err=%v", exists, err)
+	}
+	// 删帖重发：旧消息已记录内容哈希，新 message_id 携带相同内容出现
+	if err := repo.Record(ctx, domain.MessageRef{Chat: source, MessageID: 100},
+		target, 1, 5001, "h1"); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := repo.ExistsByContent(ctx, source, target, "h1"); err != nil || !exists {
+		t.Fatalf("同源同目标同内容应命中: exists=%v err=%v", exists, err)
+	}
+	if exists, _ := repo.ExistsByContent(ctx, source, target, "h2"); exists {
+		t.Error("不同内容不应命中")
+	}
+	source2 := domain.NewChatRef(domain.PeerChannel, 3333)
+	if err := repo.Record(ctx, domain.MessageRef{Chat: source2, MessageID: 200},
+		target, 1, 5002, "h2"); err != nil {
+		t.Fatal(err)
+	}
+	if exists, _ := repo.ExistsByContent(ctx, source2, target, "h1"); exists {
+		t.Error("不同源不应命中")
+	}
+	target2 := domain.NewChatRef(domain.PeerChannel, 4444)
+	if exists, _ := repo.ExistsByContent(ctx, source, target2, "h1"); exists {
+		t.Error("不同目标不应命中")
+	}
+
+	t.Cleanup(func() {
+		_, _ = d.ExecContext(context.Background(),
+			"DELETE FROM forwarded_messages WHERE source_chat_id IN (1111, 3333)")
+	})
+}
+
 // TestAuditRepoAppend：审计写入往返。
 func TestAuditRepoAppend(t *testing.T) {
 	db, ctx := testMigratedDB(t)
