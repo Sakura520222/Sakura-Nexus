@@ -38,6 +38,10 @@ type Env struct {
 
 	LogLevel               string
 	ShutdownTimeoutSeconds int
+
+	// MediaTmpDir 是媒体临时文件根目录（可选，MEDIA_TMP_DIR；03 §3.9「目录可配」；
+	// 空 = 系统临时目录下 sakura-nexus/ 子目录）。
+	MediaTmpDir string
 }
 
 // MissingEnvError 报告全部缺失的必填项（一次性全量列出，便于修复）。
@@ -82,6 +86,7 @@ func Load(files ...string) (*Env, error) {
 		WebUIUsername:      getenv("WEBUI_USERNAME", "admin"),
 		WebUIPassword:      os.Getenv("WEBUI_PASSWORD"),
 		LogLevel:           getenv("LOG_LEVEL", "info"),
+		MediaTmpDir:        os.Getenv("MEDIA_TMP_DIR"), // 可选；空 = 系统临时目录下 sakura-nexus/（03 §3.9）
 	}
 
 	var err error

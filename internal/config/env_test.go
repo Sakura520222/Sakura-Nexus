@@ -159,3 +159,26 @@ func TestDotenvFileLoaded(t *testing.T) {
 		t.Errorf(".env 文件加载不符: %+v", env)
 	}
 }
+
+func TestMediaTmpDirOptional(t *testing.T) {
+	setFullEnv(t)
+	t.Setenv("MEDIA_TMP_DIR", "/data/tmp-media")
+	env, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if env.MediaTmpDir != "/data/tmp-media" {
+		t.Errorf("MEDIA_TMP_DIR 应被读取: %+v", env.MediaTmpDir)
+	}
+}
+
+func TestMediaTmpDirDefaultsEmpty(t *testing.T) {
+	setFullEnv(t) // 未设置 MEDIA_TMP_DIR
+	env, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if env.MediaTmpDir != "" {
+		t.Errorf("MEDIA_TMP_DIR 未设置应为空（走引擎默认 sakura-nexus 子目录）: %q", env.MediaTmpDir)
+	}
+}

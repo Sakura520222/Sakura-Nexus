@@ -277,24 +277,32 @@ func (c fakeChannels) Get(_ context.Context, tgID int64) (domain.Channel, bool, 
 }
 
 type fakeDownloader struct {
-	mu      sync.Mutex
-	calls   []string
-	content []byte
+	mu        sync.Mutex
+	calls     []string
+	content   []byte
+	freshSize int64  // 刷新后回传的 Size（模拟下载器返回新鲜元数据）
+	freshName string // 刷新后回传的 FileName
 }
 
 var _ MediaDownloader = (*fakeDownloader)(nil)
 
-func (f *fakeDownloader) DownloadMedia(_ context.Context, _ domain.ChannelMessage, _ domain.MediaRef, dest string) error {
+func (f *fakeDownloader) DownloadMedia(_ context.Context, _ domain.ChannelMessage, media domain.MediaRef, dest string) (domain.MediaRef, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
+		return media, err
 	}
 	if err := os.WriteFile(dest, f.content, 0o644); err != nil {
-		return err
+		return media, err
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, dest)
 	f.mu.Unlock()
-	return nil
+	if f.freshSize != 0 {
+		media.Size = f.freshSize
+	}
+	if f.freshName != "" {
+		media.FileName = f.freshName
+	}
+	return media, nil
 }
 
 func (f *fakeDownloader) callCount() int {
@@ -323,9 +331,13 @@ func (s *sleepLog) list() []time.Duration {
 	return append([]time.Duration(nil), s.durs...)
 }
 
-// zeroDelayParams：测试用参数（延迟 0，相册窗口 200ms/2000ms）。
+// zeroDelayParams：测试用参数（延迟 0、媒体上限极大、相册窗口 200ms/2000ms）。
 func zeroDelayParams() ForwardingParams {
-	return ForwardingParams{AlbumQuietMs: 200, AlbumHardDeadlineMs: 2000}
+	return ForwardingParams{
+		AlbumQuietMs:        200,
+		AlbumHardDeadlineMs: 2000,
+		MediaMaxSizeBytes:   1 << 40,
+	}
 }
 
 func discardLogger() *slog.Logger {
@@ -344,6 +356,7 @@ func newTestEngine(t *testing.T, rules []domain.ForwardRule, snd *fakeSender,
 		Sender:   snd,
 		Media:    dl,
 		Channels: chans,
+		TmpDir:   t.TempDir(), // 隔离临时目录（启动清理/任务目录不污染系统 /tmp）
 		Log:      discardLogger(),
 	})
 	e.ApplySettings(zeroDelayParams())
@@ -1068,4 +1081,85 @@ func TestEngineShutdownFinishesCurrentDropsQueued(t *testing.T) {
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+// ---------- T3.6：媒体大小上限与临时文件 ----------
+
+// 声明尺寸超上限（settings.media_max_size）→ 不下载、永久终结、计失败（03 §3.9）。
+func TestEngineMediaTooLargeSkipsPermanently(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	dl := &fakeDownloader{}
+	e, store := newTestEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, snd, dedup, dl, nil)
+	p := zeroDelayParams()
+	p.MediaMaxSizeBytes = 1000
+	e.ApplySettings(p)
+	startEngine(t, e)
+
+	m := mediaMsg(100, 5, "big", "video")
+	m.Media[0].Size = 9999
+	e.HandleNew(context.Background(), m)
+
+	waitSignal(t, store.advanced, "超限终结推进")
+	if dl.callCount() != 0 {
+		t.Error("超限媒体不应触发下载")
+	}
+	if snd.callCount() != 0 {
+		t.Error("超限媒体不应发送")
+	}
+	stats := dedup.statList()
+	if len(stats) != 1 || stats[0].forwarded {
+		t.Errorf("应计一次失败: %+v", stats)
+	}
+	if got := cursorOf(e, 1); got != 5 {
+		t.Errorf("超限应永久终结推进 cursor，实际 %d", got)
+	}
+}
+
+// 下载器返回刷新后的 MediaRef（真实尺寸/文件名）→ LocalFile.Meta 使用新鲜值。
+func TestEngineUsesFreshMetaFromDownloader(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	dl := &fakeDownloader{content: []byte("x"), freshSize: 4242, freshName: "cat.mp4"}
+	e, _ := newTestEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, snd, dedup, dl, nil)
+	startEngine(t, e)
+
+	e.HandleNew(context.Background(), mediaMsg(100, 6, "fresh", "video"))
+	waitSignal(t, dedup.recorded, "媒体转发完成")
+
+	calls := snd.fileCalls()
+	if len(calls) != 1 || len(calls[0].files) != 1 {
+		t.Fatalf("应一次单文件发送: %+v", calls)
+	}
+	meta := calls[0].files[0].Meta
+	if meta.Size != 4242 || meta.FileName != "cat.mp4" {
+		t.Errorf("LocalFile.Meta 应为下载器刷新后的值: %+v", meta)
+	}
+}
+
+// 启动清理：Run 开始时移除残留的任务级临时目录（崩溃保护，03 §3.9）。
+func TestEngineStartupCleansStaleTempDirs(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	root := t.TempDir()
+	stale := filepath.Join(root, "fwd-stale-123")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "chunk.bin"), []byte("leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(root, "other-dir")
+	if err := os.MkdirAll(keep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	e, _ := newTestEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, snd, dedup, nil, nil)
+	e.tmpRoot = root
+	startEngine(t, e)
+
+	eventually(t, "残留 fwd-* 目录清理", func() bool {
+		_, err := os.Stat(stale)
+		return os.IsNotExist(err)
+	})
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("非 fwd-* 目录不应被清理: %v", err)
+	}
 }

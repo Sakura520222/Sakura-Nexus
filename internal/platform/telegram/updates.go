@@ -318,6 +318,8 @@ func convertMedia(media tg.MessageMediaClass) []domain.MediaRef {
 						isAudio = true
 					}
 					ref.Duration = int(attr.Duration)
+				case *tg.DocumentAttributeFilename:
+					ref.FileName = attr.FileName // 上传重放保真（T3.6 经新鲜引用携带）
 				}
 			}
 			switch {

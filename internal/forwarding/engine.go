@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,9 +42,11 @@ type ForwardedStore interface {
 	IncrStats(ctx context.Context, ruleID int64, forwarded bool) error
 }
 
-// MediaDownloader 将单条媒体流式下载到 dest（03 §3.3 ②；正式实现在 T3.6）。
+// MediaDownloader 将单条媒体流式下载到 dest，返回刷新后的媒体元数据
+// （真实尺寸/文件名——原 MediaRef.Size 对 photo 是占位值；03 §3.3 ②/§1.5）。
+// 正式实现在 platform/telegram（T3.6）。超过大小上限返回 domain.ErrMediaTooLarge。
 type MediaDownloader interface {
-	DownloadMedia(ctx context.Context, m domain.ChannelMessage, media domain.MediaRef, dest string) error
+	DownloadMedia(ctx context.Context, m domain.ChannelMessage, media domain.MediaRef, dest string) (domain.MediaRef, error)
 }
 
 // ChannelSource 查源频道 username（规则 username 辅助列匹配用）。mysql.ChannelRepo 满足。
@@ -73,10 +77,11 @@ type FailureClassifier func(err error) SendFailureKind
 type ForwardingParams struct {
 	DefaultDelayMinSec  float64 // 规则未配置延迟时的默认随机延迟下限
 	DefaultDelayMaxSec  float64
-	AlbumQuietMs        int  // 相册静默窗口
-	AlbumHardDeadlineMs int  // 相册硬上限
-	ContentDedup        bool // 内容哈希去重（防删帖重发）
-	DedupDays           int  // 去重记录保留天数（维护清理）
+	AlbumQuietMs        int   // 相册静默窗口
+	AlbumHardDeadlineMs int   // 相册硬上限
+	MediaMaxSizeBytes   int64 // 单文件大小上限（settings.media_max_size_mb，默认 2GB）
+	ContentDedup        bool  // 内容哈希去重（防删帖重发）
+	DedupDays           int   // 去重记录保留天数（维护清理）
 }
 
 // DefaultForwardingParams 与 config.defaultForwarding 保持一致（01 §6.2 默认值）。
@@ -86,6 +91,7 @@ func DefaultForwardingParams() ForwardingParams {
 		DefaultDelayMaxSec:  2.0,
 		AlbumQuietMs:        450,
 		AlbumHardDeadlineMs: 2000,
+		MediaMaxSizeBytes:   2 << 30, // 2GB（03 §3.9 默认）
 		DedupDays:           30,
 	}
 }
@@ -172,7 +178,7 @@ func NewEngine(deps EngineDeps) *Engine {
 	}
 	tmp := deps.TmpDir
 	if tmp == "" {
-		tmp = os.TempDir()
+		tmp = filepath.Join(os.TempDir(), "sakura-nexus") // 03 §3.9 默认子目录
 	}
 	p := DefaultForwardingParams()
 	e := &Engine{
@@ -214,11 +220,12 @@ func albumConfigOf(p ForwardingParams) AlbumConfig {
 
 func (e *Engine) Name() string { return "forwarding" }
 
-// Run 装载规则并启动单消费者与相册驱动循环，阻塞至 ctx 取消。
+// Run 装载规则、清理残留临时文件并启动单消费者与相册驱动循环，阻塞至 ctx 取消。
 func (e *Engine) Run(ctx context.Context) error {
 	if err := e.RefreshRules(ctx); err != nil {
 		return fmt.Errorf("装载转发规则: %w", err)
 	}
+	e.cleanupStaleTemp()
 	e.wg.Add(2)
 	go e.consumeLoop(ctx)
 	go e.albumLoop(ctx)
@@ -475,12 +482,21 @@ func (e *Engine) sendOnce(ctx context.Context, t *sendTask) (domain.SentMessage,
 	}
 }
 
-// sendAsFiles 下载媒体到任务级临时目录并发送；目录随任务结束即删（03 §3.9 即时删除；
-// 下载路径上的临时文件生命周期由 T3.6 完善为启动清理+大小上限）。
+// sendAsFiles 下载媒体到任务级临时目录并发送；目录随任务结束即删（03 §3.9 即时删除）。
+// 下载前按声明尺寸预检上限；下载器回传刷新后的元数据（真实尺寸/文件名）供上传使用。
 // T3.7/T3.8 的 AI 改写与底栏将在此处的 caption 构造点接入（改写后文本 + 底栏）。
 func (e *Engine) sendAsFiles(ctx context.Context, t *sendTask) (domain.SentMessage, error) {
 	if e.deps.Media == nil {
 		return domain.SentMessage{}, fmt.Errorf("媒体下载器未接入（T3.6 前 copy 模式媒体消息不发送）")
+	}
+	maxSize := e.params.Load().MediaMaxSizeBytes
+	for i := range t.msgs {
+		for _, media := range t.msgs[i].Media {
+			if maxSize > 0 && media.Size > maxSize {
+				return domain.SentMessage{}, fmt.Errorf("%w: msg=%d %s 声明 %d 字节 > 上限 %d",
+					domain.ErrMediaTooLarge, t.msgs[i].Ref.MessageID, media.Key, media.Size, maxSize)
+			}
+		}
 	}
 	dir, err := os.MkdirTemp(e.tmpRoot, "fwd-*")
 	if err != nil {
@@ -492,10 +508,11 @@ func (e *Engine) sendAsFiles(ctx context.Context, t *sendTask) (domain.SentMessa
 	for i := range t.msgs {
 		for _, media := range t.msgs[i].Media {
 			dest := tempMediaPath(dir, t.msgs[i], media)
-			if err := e.deps.Media.DownloadMedia(ctx, t.msgs[i], media, dest); err != nil {
+			fresh, err := e.deps.Media.DownloadMedia(ctx, t.msgs[i], media, dest)
+			if err != nil {
 				return domain.SentMessage{}, fmt.Errorf("下载媒体 msg=%d %s: %w", t.msgs[i].Ref.MessageID, media.Key, err)
 			}
-			files = append(files, domain.LocalFile{Path: dest, Meta: media})
+			files = append(files, domain.LocalFile{Path: dest, Meta: fresh})
 		}
 	}
 	return e.deps.Sender.SendFiles(ctx, domain.SendRequest{
@@ -503,6 +520,30 @@ func (e *Engine) sendAsFiles(ctx context.Context, t *sendTask) (domain.SentMessa
 		Caption:  t.view.AggregateText,
 		Entities: t.msgs[0].Entities, // caption 实体随首成员
 	}, files)
+}
+
+// cleanupStaleTemp 移除残留的任务级临时目录（fwd-*，崩溃保护；03 §3.9 启动清理）。
+func (e *Engine) cleanupStaleTemp() {
+	entries, err := os.ReadDir(e.tmpRoot)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			e.log.Warn("读取媒体临时目录失败", "dir", e.tmpRoot, "err", err)
+		}
+		return
+	}
+	n := 0
+	for _, ent := range entries {
+		if ent.IsDir() && strings.HasPrefix(ent.Name(), "fwd-") {
+			if err := os.RemoveAll(filepath.Join(e.tmpRoot, ent.Name())); err == nil {
+				n++
+			} else {
+				e.log.Warn("清理残留临时目录失败", "dir", ent.Name(), "err", err)
+			}
+		}
+	}
+	if n > 0 {
+		e.log.Info("已清理崩溃残留的媒体临时目录", "count", n)
+	}
 }
 
 func (e *Engine) rulesSnapshot() []domain.ForwardRule {
@@ -601,6 +642,9 @@ func (e *Engine) delayFor(rule domain.ForwardRule) time.Duration {
 }
 
 func (e *Engine) classifyFailure(err error) SendFailureKind {
+	if errors.Is(err, domain.ErrMediaTooLarge) {
+		return FailurePermanent // 内建哨兵：策略性永久失败（03 §3.9）
+	}
 	if e.deps.Classify == nil {
 		return FailureTransient
 	}

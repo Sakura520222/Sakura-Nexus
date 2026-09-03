@@ -37,6 +37,7 @@ type ForwardingSettings struct {
 	DefaultDelayMaxSec  float64 `json:"default_delay_max_sec"`
 	AlbumQuietMs        int     `json:"album_quiet_ms"`         // 相册静默窗口（默认 450）
 	AlbumHardDeadlineMs int     `json:"album_hard_deadline_ms"` // 相册硬上限（默认 2000）
+	MediaMaxSizeMB      int     `json:"media_max_size_mb"`      // 单文件大小上限（默认 2048=2GB，03 §3.9）
 }
 
 func (f ForwardingSettings) Validate() error {
@@ -49,6 +50,9 @@ func (f ForwardingSettings) Validate() error {
 	if f.AlbumQuietMs <= 0 || f.AlbumHardDeadlineMs < f.AlbumQuietMs {
 		return fmt.Errorf("相册窗口非法: quiet=%d hard=%d", f.AlbumQuietMs, f.AlbumHardDeadlineMs)
 	}
+	if f.MediaMaxSizeMB <= 0 {
+		return fmt.Errorf("media_max_size_mb 必须为正: %d", f.MediaMaxSizeMB)
+	}
 	return nil
 }
 
@@ -60,6 +64,7 @@ func defaultForwarding() ForwardingSettings {
 		DefaultDelayMaxSec:  2.0,
 		AlbumQuietMs:        450,
 		AlbumHardDeadlineMs: 2000,
+		MediaMaxSizeMB:      2048,
 	}
 }
 
