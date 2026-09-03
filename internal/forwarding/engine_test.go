@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -331,7 +332,7 @@ func (s *sleepLog) list() []time.Duration {
 	return append([]time.Duration(nil), s.durs...)
 }
 
-// zeroDelayParams：测试用参数（延迟 0、媒体上限极大、相册窗口 200ms/2000ms）。
+// zeroDelayParams：测试用参数（延迟 0、媒体上限极大、无默认底栏、相册窗口 200ms/2000ms）。
 func zeroDelayParams() ForwardingParams {
 	return ForwardingParams{
 		AlbumQuietMs:        200,
@@ -1288,5 +1289,104 @@ func TestEngineAIRewriteNilRewriterUsesOriginal(t *testing.T) {
 	calls := snd.textCalls()
 	if len(calls) != 1 || calls[0].Text != "无 rewriter" {
 		t.Fatalf("应原文直发: %+v", calls)
+	}
+}
+
+// ---------- T3.8：底栏 ----------
+
+func footerChannels() fakeChannels {
+	return fakeChannels{
+		100: {TgID: 100, Username: "srcfoo", Title: "源频道"},
+		200: {TgID: 200, Username: "dstbar", Title: "目标频道"},
+	}
+}
+
+// 自定义底栏（最高优先级，不受 show_default_footer 影响）。
+func TestEngineAppendsCustomFooter(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	r := rule(1, 100, 200)
+	r.CustomFooter = "via {source_channel} → {target_title} #{message_id} @{assistant_bot}"
+	e, _ := newTestEngine(t, []domain.ForwardRule{r}, snd, dedup, nil, footerChannels())
+	e.deps.AssistantBot = "sakura_bot"
+	startEngine(t, e)
+
+	e.HandleNew(context.Background(), textMsg(100, 5, "body"))
+	waitSignal(t, dedup.recorded, "底栏转发完成")
+
+	calls := snd.textCalls()
+	if len(calls) != 1 {
+		t.Fatalf("应一次发送: %+v", calls)
+	}
+	want := "body\n\nvia @srcfoo → 目标频道 #5 @sakura_bot"
+	if calls[0].Text != want {
+		t.Errorf("底栏渲染不符:\n got  %q\n want %q", calls[0].Text, want)
+	}
+}
+
+// 默认底栏（show_default_footer 开启、规则无自定义）：最小形态 = 源链接。
+func TestEngineDefaultFooterWhenEnabled(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	e, _ := newTestEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, snd, dedup, nil, footerChannels())
+	p := zeroDelayParams()
+	p.ShowDefaultFooter = true
+	e.ApplySettings(p)
+	startEngine(t, e)
+
+	e.HandleNew(context.Background(), textMsg(100, 6, "hello"))
+	waitSignal(t, dedup.recorded, "默认底栏转发完成")
+
+	calls := snd.textCalls()
+	want := "hello\n\nhttps://t.me/srcfoo/6"
+	if len(calls) != 1 || calls[0].Text != want {
+		t.Errorf("默认底栏不符: %q", calls[0].Text)
+	}
+}
+
+// 底栏拼接在改写文本之后（03 §3.3 ②：caption = 改写后文本 + 底栏）。
+func TestEngineFooterAfterRewrite(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	rw := &fakeRewriter{resp: domain.AIResponse{Text: "改写稿"}}
+	r := aiRule(1, 100, 200)
+	r.CustomFooter = "{source_link}"
+	e, _ := newTestEngine(t, []domain.ForwardRule{r}, snd, dedup, nil, footerChannels())
+	e.deps.Rewriter = rw
+	startEngine(t, e)
+
+	e.HandleNew(context.Background(), textMsg(100, 7, "raw"))
+	waitSignal(t, dedup.recorded, "改写+底栏完成")
+
+	calls := snd.textCalls()
+	want := "改写稿\n\nhttps://t.me/srcfoo/7"
+	if len(calls) != 1 || calls[0].Text != want {
+		t.Errorf("改写+底栏不符: %q", calls[0].Text)
+	}
+}
+
+// 相册底栏 message_id 取组内最小（指向相册首条）。
+func TestEngineAlbumFooterUsesMinMessageID(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	r := rule(1, 100, 200)
+	r.CustomFooter = "#{message_id}"
+	e, _ := newTestEngine(t, []domain.ForwardRule{r}, snd, dedup,
+		&fakeDownloader{content: []byte("x")}, footerChannels())
+	startEngine(t, e)
+	fc := &fakeClock{mu: time.Unix(1700000000, 0)}
+	e.albumMu.Lock()
+	e.album.clock = fc
+	e.albumMu.Unlock()
+
+	e.HandleNew(context.Background(), albumMember(100, 12, 3, "c3", "photo"))
+	e.HandleNew(context.Background(), albumMember(100, 10, 3, "c1", "photo"))
+	e.HandleNew(context.Background(), albumMember(100, 11, 3, "c2", "photo"))
+	fc.advance(250 * time.Millisecond)
+	e.drainAlbum(context.Background())
+	waitSignal(t, dedup.recorded, "相册底栏完成")
+
+	calls := snd.fileCalls()
+	if len(calls) != 1 {
+		t.Fatalf("相册应一次发送: %+v", calls)
+	}
+	if !strings.HasSuffix(calls[0].req.Caption, "#10") {
+		t.Errorf("相册底栏应指向最小 id 10: %q", calls[0].req.Caption)
 	}
 }

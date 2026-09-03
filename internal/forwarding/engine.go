@@ -89,6 +89,7 @@ type ForwardingParams struct {
 	MediaMaxSizeBytes   int64 // 单文件大小上限（settings.media_max_size_mb，默认 2GB）
 	ContentDedup        bool  // 内容哈希去重（防删帖重发）
 	DedupDays           int   // 去重记录保留天数（维护清理）
+	ShowDefaultFooter   bool  // 规则无自定义底栏时是否追加默认底栏（03 §3.6）
 }
 
 // DefaultForwardingParams 与 config.defaultForwarding 保持一致（01 §6.2 默认值）。
@@ -100,6 +101,7 @@ func DefaultForwardingParams() ForwardingParams {
 		AlbumHardDeadlineMs: 2000,
 		MediaMaxSizeBytes:   2 << 30, // 2GB（03 §3.9 默认）
 		DedupDays:           30,
+		ShowDefaultFooter:   true,
 	}
 }
 
@@ -135,6 +137,7 @@ type EngineDeps struct {
 	Media        MediaDownloader // 可选；nil 时 copy 模式媒体消息记 error 跳过（T3.6 前置）
 	Channels     ChannelSource   // 可选；nil 时规则 username 辅助列不参与匹配
 	Rewriter     Rewriter        // 可选；nil 时 ai_enabled 规则直发原文（03 §3.2 ⑧）
+	AssistantBot string          // {assistant_bot} 占位符取值（接线方传 Bot username）
 	Classify     FailureClassifier
 	RandomSource func() float64 // 可选；nil = math/rand 全局源
 	TmpDir       string         // 媒体临时文件根目录；"" = 系统临时目录 sakura-nexus/（03 §3.9）
@@ -428,6 +431,7 @@ func (e *Engine) execute(ctx context.Context, t *sendTask) {
 	}
 
 	e.rewriteIfEnabled(ctx, t)
+	e.appendFooter(ctx, t)
 
 	sent, err := e.sendWithRetry(ctx, t)
 	pctx := context.WithoutCancel(ctx)
@@ -500,6 +504,47 @@ func (e *Engine) sendWithRetry(ctx context.Context, t *sendTask) (domain.SentMes
 	return domain.SentMessage{}, lastErr
 }
 
+// appendFooter 按模板渲染底栏并追加到发送文本（03 §3.3 ②：改写后文本 + 底栏；
+// forward 模式原样转发不适用）。相册 message_id 取组内最小（指向相册首条）。
+func (e *Engine) appendFooter(ctx context.Context, t *sendTask) {
+	if t.rule.CopyMode == "forward" {
+		return
+	}
+	tmpl := ChooseFooter(t.rule, *e.params.Load())
+	if tmpl == "" {
+		return
+	}
+	fc := FooterContext{
+		Source:       t.msgs[0].Ref.Chat,
+		Target:       t.rule.Target,
+		MessageID:    minMessageID(t.msgs),
+		AssistantBot: e.deps.AssistantBot,
+	}
+	if e.deps.Channels != nil {
+		if ch, ok, err := e.deps.Channels.Get(ctx, fc.Source.ID); err != nil {
+			e.log.Warn("底栏源频道查询失败", "chat", fc.Source, "err", err)
+		} else if ok {
+			fc.SourceUsername, fc.SourceTitle = ch.Username, ch.Title
+		}
+		if ch, ok, err := e.deps.Channels.Get(ctx, fc.Target.ID); err != nil {
+			e.log.Warn("底栏目标频道查询失败", "chat", fc.Target, "err", err)
+		} else if ok {
+			fc.TargetUsername, fc.TargetTitle = ch.Username, ch.Title
+		}
+	}
+	t.text += "\n\n" + RenderFooter(tmpl, fc)
+}
+
+func minMessageID(msgs []domain.ChannelMessage) int64 {
+	min := msgs[0].Ref.MessageID
+	for _, m := range msgs[1:] {
+		if m.Ref.MessageID < min {
+			min = m.Ref.MessageID
+		}
+	}
+	return min
+}
+
 // sendOnce 按三态发送分派（03 §3.3）：copy_mode=forward / 媒体 / 纯文本。
 func (e *Engine) sendOnce(ctx context.Context, t *sendTask) (domain.SentMessage, error) {
 	switch {
@@ -518,7 +563,6 @@ func (e *Engine) sendOnce(ctx context.Context, t *sendTask) (domain.SentMessage,
 
 // sendAsFiles 下载媒体到任务级临时目录并发送；目录随任务结束即删（03 §3.9 即时删除）。
 // 下载前按声明尺寸预检上限；下载器回传刷新后的元数据（真实尺寸/文件名）供上传使用。
-// T3.8 底栏将在此处的 caption 构造点接入（当前 = 改写后文本）。
 func (e *Engine) sendAsFiles(ctx context.Context, t *sendTask) (domain.SentMessage, error) {
 	if e.deps.Media == nil {
 		return domain.SentMessage{}, fmt.Errorf("媒体下载器未接入（T3.6 前 copy 模式媒体消息不发送）")
