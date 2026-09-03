@@ -186,6 +186,7 @@ func (f *fakeForwarded) Record(_ context.Context, src domain.MessageRef, target 
 	ruleID int64, targetMessageID int64, contentHash string,
 ) error {
 	f.mu.Lock()
+	f.exists[dedupKey{src.Chat, src.MessageID, target}] = true // 模拟 INSERT：写入后 Exists 命中
 	f.records = append(f.records, recordCall{src: src, target: target, ruleID: ruleID,
 		sentMsg: targetMessageID, hash: contentHash})
 	f.mu.Unlock()
@@ -1389,4 +1390,198 @@ func TestEngineAlbumFooterUsesMinMessageID(t *testing.T) {
 	if !strings.HasSuffix(calls[0].req.Caption, "#10") {
 		t.Errorf("相册底栏应指向最小 id 10: %q", calls[0].req.Caption)
 	}
+}
+
+// ---------- T3.9：回溯补发 ----------
+
+// fakeHistory 模拟 Fetcher.GetHistory：仅返回 id > minID 的消息，新→旧排序
+// （对齐 Telegram getHistory 返回序），至多 limit 条。
+type fakeHistory struct {
+	mu       sync.Mutex
+	msgs     []domain.ChannelMessage
+	gotMinID int64
+	gotLimit int
+}
+
+var _ HistoryFetcher = (*fakeHistory)(nil)
+
+func (f *fakeHistory) GetHistory(_ context.Context, _ domain.ChatRef, minID int64, limit int) ([]domain.ChannelMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gotMinID, f.gotLimit = minID, limit
+	var out []domain.ChannelMessage
+	for i := len(f.msgs) - 1; i >= 0 && len(out) < limit; i-- { // 新→旧
+		if f.msgs[i].Ref.MessageID > minID {
+			out = append(out, f.msgs[i])
+		}
+	}
+	return out, nil
+}
+
+func newBackfillEngine(t *testing.T, rules []domain.ForwardRule, hist *fakeHistory) (*Engine, *fakeRuleStore) {
+	t.Helper()
+	e, store := newTestEngine(t, rules, &fakeSender{}, newFakeForwarded(), nil, nil)
+	e.deps.History = hist
+	startEngine(t, e)
+	return e, store
+}
+
+func backfillEngineSender(e *Engine) *fakeSender { return e.deps.Sender.(*fakeSender) }
+
+// 历史按升序补发；完成后 cursor 推进并持久化。
+func TestEngineBackfillForwardsAscendingAndAdvances(t *testing.T) {
+	hist := &fakeHistory{msgs: []domain.ChannelMessage{
+		textMsg(100, 3, "m3"), textMsg(100, 1, "m1"), textMsg(100, 2, "m2"),
+	}}
+	e, store := newBackfillEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, hist)
+
+	res, err := e.Backfill(context.Background(), 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Fetched != 3 {
+		t.Errorf("Fetched 应为 3: %+v", res)
+	}
+	if res.Cursor != 3 {
+		t.Errorf("完成后 cursor 应为 3: %+v", res)
+	}
+	texts := backfillEngineSender(e).textCalls()
+	if len(texts) != 3 {
+		t.Fatalf("应补发 3 条: %+v", texts)
+	}
+	for i, want := range []string{"m1", "m2", "m3"} {
+		if texts[i].Text != want {
+			t.Errorf("发送应按升序: [%d]=%q want %q", i, texts[i].Text, want)
+		}
+	}
+	// 逐条终结 → 逐次持久化（GREATEST 单调）；断言终值与单调性
+	adv := store.advanceList()
+	if len(adv) == 0 || adv[len(adv)-1].cursor != 3 {
+		t.Errorf("水位最终应推进至 3: %+v", adv)
+	}
+	for i := 1; i < len(adv); i++ {
+		if adv[i].cursor <= adv[i-1].cursor {
+			t.Errorf("持久化水位应单调递增: %+v", adv)
+		}
+	}
+}
+
+// 单次上限 200（防风暴，03 §3.7）；minID 来自当前 contiguous cursor。
+func TestEngineBackfillLimitCapAndMinIDFromCursor(t *testing.T) {
+	hist := &fakeHistory{}
+	e, _ := newBackfillEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, hist)
+
+	if _, err := e.Backfill(context.Background(), 1, 500); err != nil {
+		t.Fatal(err)
+	}
+	if hist.gotLimit != 200 {
+		t.Errorf("limit 应被钳制到 200: %d", hist.gotLimit)
+	}
+	if hist.gotMinID != 0 {
+		t.Errorf("初始 minID 应为规则水位 0: %d", hist.gotMinID)
+	}
+
+	// 活动处理推进后再次 backfill：minID = 当前 cursor
+	e.HandleNew(context.Background(), textMsg(100, 50, "live"))
+	if err := e.drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Backfill(context.Background(), 1, 10); err != nil {
+		t.Fatal(err)
+	}
+	if hist.gotMinID != 50 {
+		t.Errorf("二次 backfill minID 应为当前 cursor 50: %d", hist.gotMinID)
+	}
+}
+
+// 未知/禁用规则拒绝。
+func TestEngineBackfillUnknownRule(t *testing.T) {
+	e, _ := newBackfillEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, &fakeHistory{})
+	if _, err := e.Backfill(context.Background(), 99, 10); err == nil {
+		t.Fatal("未知规则应报错")
+	}
+}
+
+// §6 冻结恢复用例：100 transient 失败 → 101/102 成功但 cursor 停 99；
+// backfill 重拉 100–102 → 100 重试成功、101/102 去重跳过 → 连续推进至 102。
+func TestEngineBackfillRecoversTransientFailure(t *testing.T) {
+	snd := &fakeSender{errs: []error{
+		errors.New("flood"), errors.New("flood"), errors.New("flood"), // 100 首轮三次尝试失败
+	}}
+	dedup := newFakeForwarded()
+	store := &fakeRuleStore{rules: []domain.ForwardRule{lastCursorRule(1, 100, 200, 99)}, advanced: make(chan struct{}, 16)}
+	e := NewEngine(EngineDeps{Rules: store, Dedup: dedup, Sender: snd, TmpDir: t.TempDir(), Log: discardLogger()})
+	e.ApplySettings(zeroDelayParams())
+	sl := &sleepLog{}
+	e.sleep = sl.sleep
+	hist := &fakeHistory{msgs: []domain.ChannelMessage{
+		textMsg(100, 102, "m102"), textMsg(100, 101, "m101"), textMsg(100, 100, "m100"),
+	}}
+	e.deps.History = hist
+	startEngine(t, e)
+
+	// 实时流：100 失败，101/102 成功
+	e.HandleNew(context.Background(), textMsg(100, 100, "m100"))
+	e.HandleNew(context.Background(), textMsg(100, 101, "m101"))
+	e.HandleNew(context.Background(), textMsg(100, 102, "m102"))
+	if err := e.drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := cursorOf(e, 1); got != 99 {
+		t.Fatalf("失败后 cursor 应保持 99: %d", got)
+	}
+
+	// backfill 恢复：100 重发成功 → 连续推进 102
+	res, err := e.Backfill(context.Background(), 1, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Cursor != 102 {
+		t.Fatalf("恢复后 cursor 应为 102: %+v", res)
+	}
+	if got := cursorOf(e, 1); got != 102 {
+		t.Errorf("内存 cursor 应为 102: %d", got)
+	}
+	recs := dedup.recordList()
+	if len(recs) != 3 {
+		t.Errorf("应有 3 条记录（100/101/102），实际 %d", len(recs))
+	}
+	if hist.gotMinID != 99 {
+		t.Errorf("backfill minID 应为 99: %d", hist.gotMinID)
+	}
+}
+
+// backfill 内含相册：组完整聚合并整体发送后才返回。
+func TestEngineBackfillWaitsForAlbumGroups(t *testing.T) {
+	hist := &fakeHistory{msgs: []domain.ChannelMessage{
+		albumMember(100, 12, 5, "c3", "photo"),
+		albumMember(100, 11, 5, "c2", "photo"),
+		albumMember(100, 10, 5, "c1", "photo"),
+	}}
+	snd := &fakeSender{}
+	dl := &fakeDownloader{content: []byte("x")}
+	store := &fakeRuleStore{rules: []domain.ForwardRule{rule(1, 100, 200)}, advanced: make(chan struct{}, 16)}
+	e := NewEngine(EngineDeps{Rules: store, Dedup: newFakeForwarded(), Sender: snd, Media: dl,
+		TmpDir: t.TempDir(), Log: discardLogger()})
+	e.ApplySettings(zeroDelayParams())
+	sl := &sleepLog{}
+	e.sleep = sl.sleep
+	e.deps.History = hist
+	startEngine(t, e)
+
+	if _, err := e.Backfill(context.Background(), 1, 50); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := snd.fileCalls()
+	if len(calls) != 1 || len(calls[0].files) != 3 {
+		t.Fatalf("相册应整组一次发送: %+v", calls)
+	}
+}
+
+// lastCursorRule 构造带初始水位的规则。
+func lastCursorRule(id, srcID, dstID, cursor int64) domain.ForwardRule {
+	r := rule(id, srcID, dstID)
+	r.LastMessageID = cursor
+	return r
 }

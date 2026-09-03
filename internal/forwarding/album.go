@@ -159,3 +159,15 @@ func (a *AlbumAggregator) Pending() int {
 	defer a.mu.Unlock()
 	return len(a.groups)
 }
+
+// FlushAll 强制冲刷全部暂存分组（backfill 沉降用：历史回放的组无需等待静默窗口；
+// 与实时流并发的极端场景下实时组会被提前分组——迟到成员独立成组语义兜底）。
+func (a *AlbumAggregator) FlushAll() [][]domain.ChannelMessage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out [][]domain.ChannelMessage
+	for gid, st := range a.groups {
+		out = append(out, a.flushLocked(gid, st))
+	}
+	return out
+}

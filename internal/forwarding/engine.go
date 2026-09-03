@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,6 +60,12 @@ type ChannelSource interface {
 // 引擎语义：改写失败 → 降级原文（03 §1.4），不是任务失败。
 type Rewriter interface {
 	Rewrite(ctx context.Context, rule domain.ForwardRule, view FilterView) (domain.AIResponse, error)
+}
+
+// HistoryFetcher 拉取源频道历史（03 §3.7 backfill 读取侧；实现在
+// platform/telegram——GetHistory 经 User 客户端，minID 为排他下界）。
+type HistoryFetcher interface {
+	GetHistory(ctx context.Context, chat domain.ChatRef, minID int64, limit int) ([]domain.ChannelMessage, error)
 }
 
 // SendFailureKind 是发送失败的引擎侧分类（§1.4 矩阵 + P0 Plan §6 cursor 语义）。
@@ -112,6 +119,8 @@ const (
 	sendQueueCapacity = 100
 	// sendMaxAttempts：transient 失败的最大尝试次数（§1.4 矩阵上限 3 次）。
 	sendMaxAttempts = 3
+	// maxBackfillLimit：单次 backfill 消息数上限（03 §3.7 默认 200 防风暴）。
+	maxBackfillLimit = 200
 	// albumFlushInterval：相册 FlushDue 驱动周期（quiet 窗口的检测精度）。
 	albumFlushInterval = 50 * time.Millisecond
 )
@@ -138,6 +147,7 @@ type EngineDeps struct {
 	Channels     ChannelSource   // 可选；nil 时规则 username 辅助列不参与匹配
 	Rewriter     Rewriter        // 可选；nil 时 ai_enabled 规则直发原文（03 §3.2 ⑧）
 	AssistantBot string          // {assistant_bot} 占位符取值（接线方传 Bot username）
+	History      HistoryFetcher  // 可选；nil 时 Backfill 报错（T3.9 前置）
 	Classify     FailureClassifier
 	RandomSource func() float64 // 可选；nil = math/rand 全局源
 	TmpDir       string         // 媒体临时文件根目录；"" = 系统临时目录 sakura-nexus/（03 §3.9）
@@ -176,6 +186,11 @@ type Engine struct {
 
 	userMu    sync.Mutex
 	usernames map[domain.ChatRef]string // 源频道 username 内存缓存（改绑罕见，重启刷新）
+
+	// enqueued/settled 是入队与完成执行的单调计数（Backfill drain 的无间隙
+	// 沉降判定：两者相等 = 队列已清且无在途任务）。
+	enqueued atomic.Int64
+	settled  atomic.Int64
 
 	wg sync.WaitGroup
 }
@@ -309,6 +324,82 @@ func (e *Engine) HandleNew(ctx context.Context, m domain.ChannelMessage) {
 // QueueLen 返回当前队列长度（诊断）。
 func (e *Engine) QueueLen() int { return len(e.queue) }
 
+// BackfillResult 是一次回溯补发的结果摘要。
+type BackfillResult struct {
+	Fetched int   // GetHistory 拉取到的消息数
+	Cursor  int64 // 全部沉降后的 contiguous cursor（可能被 transient 失败阻挡）
+}
+
+// Backfill 回溯补发（03 §3.7；WebUI POST /api/forwarding/rules/{id}/backfill）：
+// GetHistory(minID=当前 cursor, limit≤200) → 按升序送入与实时流完全相同的
+// 管线（去重自然吸收已转发）→ 沉降后返回。cursor 语义与实时流一致（§6）：
+// transient 失败的消息保持 unresolved，水位停在其前，下次 backfill 重试。
+func (e *Engine) Backfill(ctx context.Context, ruleID int64, limit int) (BackfillResult, error) {
+	rule, ok := e.findRule(ruleID)
+	if !ok {
+		return BackfillResult{}, fmt.Errorf("规则不存在或未启用: %d", ruleID)
+	}
+	if e.deps.History == nil {
+		return BackfillResult{}, fmt.Errorf("HistoryFetcher 未接入")
+	}
+	if limit <= 0 || limit > maxBackfillLimit {
+		limit = maxBackfillLimit
+	}
+
+	e.trackMu.Lock()
+	minID := e.trackerForLocked(rule).current()
+	e.trackMu.Unlock()
+
+	msgs, err := e.deps.History.GetHistory(ctx, rule.Source, minID, limit)
+	if err != nil {
+		return BackfillResult{}, fmt.Errorf("拉取历史: %w", err)
+	}
+	slices.SortFunc(msgs, func(a, b domain.ChannelMessage) int { // 升序补发
+		return int(a.Ref.MessageID - b.Ref.MessageID)
+	})
+	for _, m := range msgs {
+		e.HandleNew(ctx, m) // 与实时流同入口：含相册聚合分支（03 §3.7「完整过滤链」）
+	}
+	if err := e.drain(ctx); err != nil {
+		return BackfillResult{}, err
+	}
+
+	e.trackMu.Lock()
+	cursor := e.trackerForLocked(rule).current()
+	e.trackMu.Unlock()
+	return BackfillResult{Fetched: len(msgs), Cursor: cursor}, nil
+}
+
+func (e *Engine) findRule(ruleID int64) (domain.ForwardRule, bool) {
+	for _, r := range e.rulesSnapshot() {
+		if r.ID == ruleID {
+			return r, true
+		}
+	}
+	return domain.ForwardRule{}, false
+}
+
+// drain 沉降：强制冲刷暂存相册分组 → 等待队列清空且消费者空闲且无暂存分组。
+// backfill 完成语义依赖（"完成后更新水位"）；实时流与 backfill 共享同一队列。
+func (e *Engine) drain(ctx context.Context) error {
+	for {
+		e.albumMu.Lock()
+		groups := e.album.FlushAll()
+		e.albumMu.Unlock()
+		for _, g := range groups {
+			e.processGroup(context.Background(), g)
+		}
+		if e.enqueued.Load() == e.settled.Load() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 // ---------- 内部编排 ----------
 
 func (e *Engine) consumeLoop(ctx context.Context) {
@@ -322,6 +413,7 @@ func (e *Engine) consumeLoop(ctx context.Context) {
 				return // 关闭中不再拉取新任务（select 双就绪随机性兜底）
 			}
 			e.execute(ctx, t)
+			e.settled.Add(1)
 		}
 	}
 }
@@ -417,6 +509,7 @@ func (e *Engine) processRule(ctx context.Context, rule domain.ForwardRule, msgs 
 	}
 	select {
 	case e.queue <- task:
+		e.enqueued.Add(1)
 	case <-ctx.Done():
 		e.log.Warn("入队前 ctx 取消，消息保持未转发", "rule", rule.ID, "msg", msgs[0].Ref.MessageID)
 	}
