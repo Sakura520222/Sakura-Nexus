@@ -72,6 +72,13 @@ type SendRequest struct {
 	Silent   bool            `json:"silent,omitempty"`
 }
 
+// LocalFile 是待发送的本地临时文件（引擎下载产物 + 媒体元数据；03 §3.3 ②）。
+// forwarding 消费接口与 platform 出站实现共用此领域类型（01 §2.3 结构类型匹配）。
+type LocalFile struct {
+	Path string
+	Meta MediaRef
+}
+
 // SentMessage 是发送结果的统一回执（无论通道）。
 type SentMessage struct {
 	Chat      ChatRef `json:"chat"`

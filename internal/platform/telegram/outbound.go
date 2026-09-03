@@ -209,15 +209,10 @@ func extractSentMsgID(upd tg.UpdatesClass) int64 {
 	return 0
 }
 
-// LocalFile 是待发送的本地临时文件（引擎下载产物 + 元数据；03 §3.3 ②）。
-type LocalFile struct {
-	Path string
-	Meta domain.MediaRef
-}
-
 // SendFiles 发送媒体（本地临时文件列表；相册整体重建，03 §3.3 ②）。
 // 每个文件先经 uploader 上传得到 InputMedia，再多文件 sendMultiMedia / 单文件 sendMedia。
-func (o *Outbound) SendFiles(ctx context.Context, req domain.SendRequest, files []LocalFile) (domain.SentMessage, error) {
+// files 用 domain.LocalFile（forwarding.Sender 消费接口共用类型，01 §2.3）。
+func (o *Outbound) SendFiles(ctx context.Context, req domain.SendRequest, files []domain.LocalFile) (domain.SentMessage, error) {
 	if len(files) == 0 {
 		return domain.SentMessage{}, fmt.Errorf("SendFiles: 空文件列表")
 	}
