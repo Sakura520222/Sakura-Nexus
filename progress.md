@@ -268,3 +268,23 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - **T3.9**（ee721b1，CI 监控中）：Backfill——minID 取当前 contiguous cursor（内存 tracker 为准），GetHistory(minID, ≤200) 升序经 HandleNew 同一入口（相册聚合复用）；drain 沉降语义（enqueued/settled 双计数器消除「取任务/置忙」间隙竞态 + FlushAll 强制冲刷暂存组——历史回放不等静默窗口）；platform/telegram.History 实现 forwarding.HistoryFetcher；**§6 恢复用例端到端**（100 三连败→101/102 成功 cursor 停 99→backfill 重拉→100 成功→连续推进 102）；修复 fakeForwarded 失真（Record 未模拟 INSERT 使 Exists 命中——测试替身教训）。
 - **测试替身语义修正**：fakeForwarded.Record 现在写入 exists 映射（对齐真实 INSERT IGNORE 行为）。
 - **下一阻塞点**：GATE-2（smoke-forward 端到端：文本/媒体/相册+全成员 dedup 查库）需真实 .env（TELEGRAM_BOT_TOKEN/API_ID/HASH）——**本机未迁移生产 .env，等用户提供后执行**；之后 Phase 4 Rich 出站。
+
+## 2026-09-05 · 会话 3：GATE-2 解除阻塞并 PASS（smoke-forward 端到端 + 6 个真实缺陷修复）
+
+- **环境就位**（用户操作）：本机 docker mysql 建库 `Sakura-Nexus`（utf8mb4）+ 专用用户 `sakura_nexus`（全权）；.env 完整配置；`login-user` 完成 userbot 登录（会话中途用户换号：@CherrySakura321 → **@Let_MoonLet** id=6826794184）。
+- **smoke-forward 交付**（1e04c83）：GATE-2 冒烟设计——userbot 自建临时源/目标广播频道 + resolveUsername 解析 bot + editAdmin 提权（PostMessages）+ 规则（copy 模式）+ 完整引擎装配（userbot 静态 peer 表 / bot 经 channels.getChannels 解析目标 access_hash / 冒烟侧最小 tgerr 分类器）+ 三 case 自动发帖与目标侧 getHistory 核验 + 结束删除清理；`-keep` 保留现场；启动清扫遗留孤儿频道；FLOOD_WAIT 全调用点重试。
+- **S 冒烟抓出 6 个真实缺陷**（fake Sender/单测盲区，全部修复 + 门禁绿）：
+  1. **Outbound 三发送路径缺 random_id**（fb1e187）：Bot 账号 random_id=0 直接 400 RANDOM_ID_EMPTY（User 容忍）——SendText/sendMedia/singleMedias 统一补 crypto randomID()。
+  2. **Engine.Run 未创建媒体临时根目录**（fb1e187）：MkdirTemp 要求父目录存在，`/tmp/sakura-nexus` 缺失 → 首个媒体任务必失败——Run 前置 MkdirAll + 回归测试。
+  3. **冒烟测试图形态**（fb1e187/4fde68e）：小尺寸纯色图（96×96）相册必 400 MEDIA_INVALID（单发可过）——改 1280×720 渐变 JPEG。
+  4. **tempMediaPath 无扩展名**（4fde68e）：photo 再上传要求文件名带照片扩展，无扩展 400 PHOTO_EXT_INVALID——扩展名推导（FileName > MimeType > photo→.jpg）+ 表驱动单测。
+  5. **相册根因**（551ac00）：Telegram 现要求 sendMultiMedia 成员先经 messages.uploadMedia 注册为服务端媒体——裸 InputMediaUploadedPhoto* 成组必 400 MEDIA_INVALID（gramjs#594 同症、gotd 官方 album 测试亦只用 InputMediaPhoto）——outbound 相册路径补 registeredMedias（注册失败成员保留原样由 sendMultiMedia 统一报错），RegisteredInputMedia 导出，冒烟同路径。
+  6. **注册媒体引用缺 FileReference**（76ce5f8）：uploadMedia 返回的 Photo/Document 引用须带 file_reference，缺即 400 FILE_REFERENCE_EMPTY。
+- **GATE-2 冒烟终轮全绿 PASS**（@Let_MoonLet + @sakura_bot_test_bot，源=3706374471 目标=4404620673 临时频道，结束已清理）：
+  - ① 文本：目标 msg=2 含正文/默认底栏源链接（t.me/c/{裸id}/{msg}）/bold entity 透传 ✓
+  - ② 单媒体：目标 msg=3 照片保真 + caption 保真（MediaDownloader 下载 → Bot 上传全链）✓
+  - ③ 相册：src=[4 5 6] 三成员转发，目标 msg=4 grouped_id=14308751507576261 组内成员 3（聚合+整组重建+forwarded_messages 全成员 dedup 查库）✓
+  - forwarding_stats: forwarded=3 failed=0（相册按 1 计）✓；临时频道与规则清理 ✓
+- **附带实证**：上轮已删除频道触发 recovery `CHANNEL_PRIVATE` → 「频道不可访问→停止该频道恢复」路径按 R3.1.1 语义真实工作；建频道 FLOOD_WAIT_5/6 → 冒烟重试机制验证。
+- **前瞻接线**（T5.1 备忘新增）：BotClient.Raw() 已为 Outbound 接线就位；相册注册路径（uploadMedia）已生产化；smoke 侧最小 tgerr 分类器待 T5.1 扩展为完整 permanent 映射。
+- **GATE-2 宣告 PASS**（T3.4/T3.6 的 S 冒烟同批由 case①② 覆盖）→ 下一任务 Phase 4 T4.1（platform/botapi）。
