@@ -380,8 +380,25 @@ func (s *smoke) caseAlbum(ctx context.Context) bool {
 			s.failCase("③ 相册", err)
 			return false
 		}
+		// 相册成员先经 messages.uploadMedia 注册为服务端媒体（与 outbound 相册
+		// 路径一致；裸 InputMediaUploadedPhoto* 成组 400 MEDIA_INVALID）。
+		up, err := retryFlood(ctx, func() (tg.MessageMediaClass, error) {
+			return s.api.MessagesUploadMedia(ctx, &tg.MessagesUploadMediaRequest{
+				Peer:  peerOf(s.src),
+				Media: &tg.InputMediaUploadedPhoto{File: file},
+			})
+		})
+		if err != nil {
+			s.failCase("③ 相册", err)
+			return false
+		}
+		media, err := telegram.RegisteredInputMedia(up)
+		if err != nil {
+			s.failCase("③ 相册", err)
+			return false
+		}
 		items = append(items, tg.InputSingleMedia{
-			Media:    &tg.InputMediaUploadedPhoto{File: file},
+			Media:    media,
 			RandomID: randID(),
 		})
 	}

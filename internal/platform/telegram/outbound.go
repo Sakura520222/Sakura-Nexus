@@ -268,7 +268,7 @@ func (o *Outbound) SendFiles(ctx context.Context, req domain.SendRequest, files 
 
 	res, err := api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
 		Peer:       peer,
-		MultiMedia: singleMedias(medias, req.Caption, req.Entities),
+		MultiMedia: singleMedias(registeredMedias(ctx, api, peer, medias), req.Caption, req.Entities),
 		Silent:     req.Silent,
 	})
 	if err != nil {
@@ -311,6 +311,47 @@ func mediaAttributes(m domain.MediaRef) []tg.DocumentAttributeClass {
 		attrs = append(attrs, &tg.DocumentAttributeFilename{FileName: m.FileName})
 	}
 	return attrs
+}
+
+// registeredMedias 把上传媒体逐个经 messages.uploadMedia 注册为服务端媒体
+// （相册 sendMultiMedia 的前置要求）。裸 InputMediaUploadedPhoto* 直送成组
+// 会被 400 MEDIA_INVALID，单发送不受影响（gramjs#594 与 GATE-2 冒烟三度实证）。
+func registeredMedias(ctx context.Context, api *tg.Client, peer tg.InputPeerClass,
+	medias []tg.InputMediaClass,
+) []tg.InputMediaClass {
+	out := make([]tg.InputMediaClass, 0, len(medias))
+	for _, m := range medias {
+		up, err := api.MessagesUploadMedia(ctx, &tg.MessagesUploadMediaRequest{Peer: peer, Media: m})
+		if err != nil {
+			// 注册失败不中断整体：该成员保留原样，由 sendMultiMedia 报错统一处置。
+			out = append(out, m)
+			continue
+		}
+		reg, err := RegisteredInputMedia(up)
+		if err != nil {
+			out = append(out, m)
+			continue
+		}
+		out = append(out, reg)
+	}
+	return out
+}
+
+// RegisteredInputMedia 将 messages.uploadMedia 返回的服务端媒体转为相册可用的
+// InputMedia（photo→InputMediaPhoto、document→InputMediaDocument；按 ID 引用，
+// 服务端免去二次上传处理）。
+func RegisteredInputMedia(m tg.MessageMediaClass) (tg.InputMediaClass, error) {
+	switch v := m.(type) {
+	case *tg.MessageMediaPhoto:
+		if ph, ok := v.Photo.(*tg.Photo); ok {
+			return &tg.InputMediaPhoto{ID: &tg.InputPhoto{ID: ph.ID, AccessHash: ph.AccessHash}}, nil
+		}
+	case *tg.MessageMediaDocument:
+		if d, ok := v.Document.(*tg.Document); ok {
+			return &tg.InputMediaDocument{ID: &tg.InputDocument{ID: d.ID, AccessHash: d.AccessHash}}, nil
+		}
+	}
+	return nil, fmt.Errorf("uploadMedia 返回不可注册媒体: %T", m)
 }
 
 // singleMedias 构造相册成员（caption 在首条）。
