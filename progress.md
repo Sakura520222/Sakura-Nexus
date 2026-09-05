@@ -317,3 +317,23 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - **解释性决策**（记录，非偏离）：表格行切分为 §2.3「行级二次切分」对表格的忠实语义，比「超限即报错」更贴冻结文本；媒体/标题为原子块；`$$..$$`/```math 公式块超限→报错走 fallback（LaTeX 行切破坏语义）。
 - **门禁**：gofmt 空 / lint 0 / `-race` 全量绿；CI 33955404549 待终态。
 - **下一任务**：T4.3 Outbound 路由（Content→Renderer→Rich；lazy capability detection→fallback 链；reply_parameters/reply_markup 映射；**Rich smoke checkpoint** 非 Gate）+ T4.3 后接 T5.1。botapi 面备忘：`Call`+`ChatID`+`APIError{Method/Code/Description}`（lazy detection 按 Telegram 错误语义判定、勿写死 400）。
+
+## 2026-09-05 · 会话 4（终）：T4.3 Outbound Rich 路由完成 + Rich smoke checkpoint PASS——Phase 4 完结（78a1156 + 0ca1b23）
+
+- **交付**（rich_outbound.go + Outbound 扩展，U=fake richCaller/fakePlain 双接缝）：
+  1. **路由**（01 §4.2）：`NewOutbound(client, peers, rich *botapi.Client, opts...)`——SendText 按 Content != nil 且非 StylePlain → Rich 通道，否则 MTProto；`WithLog` 注入出站日志。
+  2. **fallback 链**（03 §2.7）：ErrRichUnsendable / 400 formatting reject → 本次降级 MTProto（capability 保持）；404 = method-not-supported 语义（§2.9 不写死码）→ 置 capability flag（缓存至进程重启，`RichCapability()` 供 T5.3 WebUI）并降级；429/5xx/网络耗尽 → 瞬态原样返回（§1.4 failed+可补发，不降级）。每次降级结构化 warn（P0 观测面）。StyleRich=硬需求：通道不可用报错不静默换道，内容性失败仍 safe fallback。
+  3. **参数构造**（03 §2.4–2.6）：chat_id 三态编码、rich_message.markdown、reply_parameters 仅首块（禁 message_thread_id）、reply_markup inline_keyboard 双映射、disable_notification。
+  4. 单测 9 个；404→capability-kill 核心行为经**变异验证**（404 当瞬态→测试红）。
+- **S：Rich smoke checkpoint PASS（非 Gate）**（cmd/smoke/smoke-rich，@Let_MoonLet + @sakura_bot_test_bot，临时频道 4485633407 结束已清理）：
+  - case① 正常 Rich 内容（标题/任务清单/表格/粗体）→ **Rich 通道实发 ✓**（msg_id=2 落点核验）
+  - case② 长内容 3×16000 字符 → 分块 Rich 实发 ✓（msg_id=3）
+  - case③ 17 层嵌套引用 → ErrRichUnsendable → **MTProto 降级 ✓**（msg_id=5，capability 保持）
+  - 终态 RichCapability 启用。**真实服务端接受 sendRichMessage——Bot API 10.2 Rich 通道对本 bot 完全可用**（404 路径未在真实环境出现，由单测+变异验证覆盖）。
+- **S 冒烟三轮实证抓出 4 个环境/观测事实**（全部修复）：
+  1. MTProto 提权 → Bot API 成员关系视图有秒级传播延迟（未传播 403 "bot is not a member"）→ EditAdmin 后 getChat 轮询探测。
+  2. **rich payload 对 gotd v0.161 不可见**（Message JSON 未知字段丢弃，getHistory 文本为空）→ 核验改按回执 message_id ∈ 历史。⚠ 对 T5.x 的含义：消费 Rich 消息内容需升级 gotd 或走 Bot API 侧读取。
+  3. 单行超限 case 的兜底 10 段连发必撞新频道 bot 发帖突发限流（约 2 条/5s），且失败重试自身注入消息使窗口排不空 → case③ 改深层引用（同路径、单段小消息）。
+  4. NewOutbound 原打 slog.Default() 致冒烟观测面失灵 → WithLog option。
+- **门禁**：gofmt 空 / lint 0 / `-race` 全量绿；CI 78a1156/0ca1b23 待终态。
+- **Phase 4（Rich 出站，ADR-008）完结**：T4.1 传输层 + T4.2 renderer + T4.3 路由 + Rich smoke checkpoint。**下一任务 Phase 5 T5.1 接线收口**（WebServer/service 注册、readiness barrier、exit 75 全链；HANDOFF §3 接线备忘含 FailureClassifier 完整映射/Rewriter/AssistantBot/settings 订阅/规则 CRUD→RefreshRules/Bot 侧 peer 查询表）。
