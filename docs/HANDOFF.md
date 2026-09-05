@@ -18,13 +18,13 @@
 | Phase 1 Telegram 风险验证 | ✅ **GATE-1 PASS + SEALED**（T1.0–T1.3） |
 | Phase 2 生命周期+存储/配置 | ✅ T2.0–T2.4 全部 CI 绿 |
 | Phase 3 转发引擎 | ✅ T3.1–T3.9 + **GATE-2 PASS**（smoke-forward 三 case 端到端 + 相册全成员 dedup 查库，2026-09-05）；S 冒烟实证修复 6 个真实缺陷（random_id/tmpRoot/扩展名/相册 uploadMedia 注册/file_reference——详见 progress.md 会话 3） |
-| Phase 4 Rich 出站 | 🔄 T4.1 ✅（platform/botapi 传输层：ChatID 三态编码 + Call 封套 + §1.4 重试矩阵 + 06 §5 脱敏，72bcc19）；**下一任务 T4.2**（normalizer/validator/splitter golden）→ T4.3（路由+lazy capability + Rich smoke checkpoint 非 Gate） |
+| Phase 4 Rich 出站 | 🔄 T4.1 ✅（botapi 传输层，72bcc19）+ T4.2 ✅（platform/telegram Rich normalizer/validator/切分 golden 边界集全实证，517c22b）；**下一任务 T4.3**（Outbound 路由 + lazy capability + fallback 链 + Rich smoke checkpoint 非 Gate） |
 | Phase 5 | 服务接线 + WebUI（T5.1–T5.4）→ GATE-3 |
 | Phase 6 | 部署与验收（T6.1–T6.4）→ GATE-4 = P0 Done |
 
 ## 3. 下一步
 
-1. **T4.2 RichMarkdownNormalizer + validator + block 切分**（依赖 T4.1 ✅）：协议限制 32768 字符/500 blocks/16 层嵌套/50 媒体/20 列（ADR-008）；golden 样例（07 §1.1 边界集）。输入=AIResponse/MessageContent 文本，产出=可发送的 Rich Markdown 块序列——注意 LLM formatting instruction ≠ Telegram protocol validation（ADR-008：模型「尽量生成正确」，程序「保证一定能发送」）。发送侧最终经 botapi.Client.Call（72bcc19，方法名 "sendRichMessage"，chat_id 经 botapi.ChatID 编码）。
+1. **T4.3 Outbound 路由**（依赖 T4.2 ✅）：SendRequest{Content}→NormalizeRichMarkdown→RichMessages→逐条 botapi.Client.Call("sendRichMessage")；chat_id 经 botapi.ChatID 编码；lazy capability detection（APIError.Code/Description 按 Telegram 错误语义判定 method-not-supported，**勿写死 400**）→ capability flag 禁用 Rich + WebUI 显示（03 §2.9）；fallback 链 Rich→entities→纯文本，每次降级记 metric+warn（03 §2.7）；reply_parameters（禁 message_thread_id）/reply_markup/domain.Keyboard 双映射（03 §2.5–2.6）；sendRichMessageDraft 仅私聊（ADR-008 硬限制，P2）。验证 U+S（**Rich smoke checkpoint 非 Gate**：真实 Rich 发送 + 不支持时降级观察）。
 2. 引擎接线（T5.1）备忘（代码注释 + 会话记录）：FailureClassifier 完整 tgerr→permanent 映射（冒烟侧已有最小版）、Rewriter（ai.Provider 适配 rule.AIPrompt）、AssistantBot（Bot username）、settings 订阅→ApplySettings、规则 CRUD→RefreshRules、**Bot 侧 peer 查询表**（冒烟用静态表 + getChannels 验证可行）、相册已生产化走 uploadMedia 注册路径（551ac00）。
 3. 已知运行事实（GATE-2 实证，写代码时参考）：Bot 账号发送必须带非零 random_id；photo 再上传文件名必须带照片扩展；sendMultiMedia 成员须先 messages.uploadMedia 注册且引用带 file_reference；小尺寸纯色图相册必拒（MEDIA_INVALID）。
 
@@ -47,8 +47,9 @@
 - 记忆已持久化：push-self-authorized / design-approval-required / dev-env-linux
 - 引擎测试基线：forwarding 包全绿（-race），新增 tmpRoot/扩展名回归测试
 
-## 6. 会话 4 追记（T4.1）
+## 6. 会话 4 追记（T4.1 + T4.2）
 
-- 提交：72bcc19（botapi 传输层 + 12 fake server 单测，CI 绿）
+- 提交：72bcc19（botapi 传输层 + 12 fake server 单测）→ 517c22b（Rich renderer 4 文件 + 1296 行，CI 绿）
 - botapi 面：`NewClient(token, Options{BaseURL/HTTPClient/Log})` + `Call(ctx, method, params, result)` + `ChatID(ChatRef)` + `APIError{Method/Code/Description}`；重试 sleep 可注入（同包测试）
+- telegram 包 Rich 面：`NormalizeRichMarkdown(string) string`（幂等）+ `ParseRichBlocks(string) []RichBlock` + `RichMessages(string) ([]string, error)`（ErrRichUnsendable→fallback）；协议常数 maxRich{Chars,Blocks,Depth,Media,Cols}
 - T4.3 接线备忘：lazy detection 拿 APIError.Code/Description 判 method-not-supported（勿写死 400）；fallback 链 Rich→entities→纯文本（03 §2.7，每次降级记 metric+warn）；reply_markup 双映射 03 §2.6；sendRichMessageDraft 仅私聊（ADR-008 硬限制）

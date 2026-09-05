@@ -304,3 +304,16 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - **TDD 过程**：逐行为 RED-GREEN；两处测试先绿后补**变异验证**——5xx 退避序列测试（破坏 2^k 退避→红）与 token 脱敏测试（注入含 token 的 RoundTripper 错误 + 破坏 sanitizeStr→红）。教训：429 场景的错误文本天然不含 token，脱敏测试必须走真正可能出现 token 的传输错误路径才有效。
 - **门禁**：gofmt 空 / golangci-lint 0 issues / `go test -race ./...` 全量绿；CI 33954114759 待终态。
 - **下一任务**：T4.2 RichMarkdownNormalizer + validator + block 切分（32768/500/16 层/50 媒体/20 列），golden 样例（07 §1.1 边界集），依赖 T4.1 ✅。
+
+## 2026-09-05 · 会话 4（续）：T4.2 Rich normalizer/validator/切分完成（golden 边界集，517c22b）
+
+- **落点修正**：renderer 位于 **platform/telegram**（07 §1.1 R3.1 路径修正），botapi（T4.1）仅传输层——两包解耦，T4.3 路由经 `NormalizeRichMarkdown → RichMessages → botapi.Client.Call` 串联。
+- **交付**（rich.go / rich_blocks.go / rich_split.go，U=golden 表驱动）：
+  1. **NormalizeRichMarkdown**（03 §2.2 五步 deterministic，输出幂等）：剥白名单外 HTML（支持集=格式文档 §7 全集——官方支持大量标签，只剥 div/script/未知裸标签）；统一标题层级（Setext→ATX、`#######`→6 级、剥闭合 `##`、`#Title` 补空格）；链接规范化（裸 URL/尖括号→显式、危险 scheme 剥链接留文本）；代码块补 `text` 语言；空白规整。围栏内/行内代码 span 不改写（代码即真理；img 属性内 URL 同保护）。
+  2. **ParseRichBlocks**：九类块流 + Depth/Media/Cols/Count；块计数依 Bot API §9（列表项、表格行计入；管道表分隔行不计）。
+  3. **RichMessages**：validator（Depth/Cols/Media 不可修复项先报）→ 超限单块行级二次切分 → 贪心 block 装包（32768 字符/500 blocks/50 媒体）。超长代码块逐片重加同语言围栏（内容行原序保全）；超限表格按行切片（管道表逐片重发表头+分隔行、HTML 表重加 `<table>` 包装——「整体优先不切」非绝对，行级切分可修复者不报错）；段落/引用沿行边界。**禁止字符硬切**：单行超限/空内容 → `ErrRichUnsendable` → fallback 链（03 §2.7）。
+- **golden 边界集（07 §1.1）全实证**：超限表格 21 列→错 / 600 行→行切分；超长代码块（40×1000）逐片围栏；16 层可发 / 17 层报错；50 媒体单条 / 51 媒体两条（50+1）；32768 边界 16000×2+2=32002 装包；kitchen-sink 端到端 golden。
+- **过程缺陷 2 个（均 TDD 红绿捕捉）**：①flush 后累加器未重置 → 第二条消息重复携带已发内容（行完整性断言抓到）；②全局块数校验抢在表格行切分前误拒 600 行表（校验时序修正：Count 交由切分处理）。
+- **解释性决策**（记录，非偏离）：表格行切分为 §2.3「行级二次切分」对表格的忠实语义，比「超限即报错」更贴冻结文本；媒体/标题为原子块；`$$..$$`/```math 公式块超限→报错走 fallback（LaTeX 行切破坏语义）。
+- **门禁**：gofmt 空 / lint 0 / `-race` 全量绿；CI 33955404549 待终态。
+- **下一任务**：T4.3 Outbound 路由（Content→Renderer→Rich；lazy capability detection→fallback 链；reply_parameters/reply_markup 映射；**Rich smoke checkpoint** 非 Gate）+ T4.3 后接 T5.1。botapi 面备忘：`Call`+`ChatID`+`APIError{Method/Code/Description}`（lazy detection 按 Telegram 错误语义判定、勿写死 400）。
