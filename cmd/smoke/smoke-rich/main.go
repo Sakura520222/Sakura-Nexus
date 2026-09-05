@@ -35,7 +35,7 @@ import (
 
 func main() {
 	keep := flag.Bool("keep", false, "保留冒烟创建的临时频道（排查用）；默认删除清理")
-	timeout := flag.Duration("timeout", 3*time.Minute, "整体超时")
+	timeout := flag.Duration("timeout", 6*time.Minute, "整体超时（case③ 前含 45s 限流静默）")
 	flag.Parse()
 
 	env, err := config.Load()
@@ -147,12 +147,34 @@ func main() {
 		}
 		fmt.Println("✓ Bot 已为频道管理员")
 
+		// Bot API 侧成员关系传播探测（MTProto 提权 → Bot API 视图存在秒级延迟；
+		// 未传播时 sendRichMessage 403 "bot is not a member"）。
+		richProbe := botapi.NewClient(env.TelegramBotToken, botapi.Options{Log: lg})
+		chatID := -(1_000_000_000_000 + tgt.ID)
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			var pong map[string]any
+			err := richProbe.Call(ctx, "getChat", map[string]any{"chat_id": chatID}, &pong)
+			if err == nil {
+				fmt.Println("✓ Bot API 成员关系已传播（getChat 命中）")
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("getChat 传播探测超时: %w", err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+
 		botPeers, how := resolveBotTarget(ctx, bot.Raw().API(), tgt.ID)
 		fmt.Printf("✓ Bot 解析频道: %s\n", how)
 
 		// Rich 通道：Bot API HTTP 客户端（同一 token，ADR-008）→ Outbound 路由。
 		richClient := botapi.NewClient(env.TelegramBotToken, botapi.Options{Log: lg})
-		out := telegram.NewOutbound(bot.Raw(), botPeers, richClient)
+		out := telegram.NewOutbound(bot.Raw(), botPeers, richClient, telegram.WithLog(lg))
 
 		if enabled, reason := out.RichCapability(); enabled {
 			fmt.Println("✓ RichCapability: 已启用")
@@ -163,6 +185,7 @@ func main() {
 		cctx, cc := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cc()
 		ok := sm.caseRich(cctx, out)
+		time.Sleep(6 * time.Second) // bot 频道发帖限流缓冲
 		ok = sm.caseLongSplit(cctx, out) && ok
 		ok = sm.caseForcedFallback(cctx, out) && ok
 
@@ -245,10 +268,12 @@ func (s *smoke) caseRich(ctx context.Context, out *telegram.Outbound) bool {
 	}, "\n")
 
 	before := s.degraded.count()
-	_, err := out.SendText(ctx, domain.SendRequest{
-		Chat:    domain.NewChatRef(domain.PeerChannel, s.tgt.ID),
-		Style:   domain.StyleAuto,
-		Content: &domain.MessageContent{Text: md},
+	sent, err := retryFlood(ctx, func() (domain.SentMessage, error) {
+		return out.SendText(ctx, domain.SendRequest{
+			Chat:    domain.NewChatRef(domain.PeerChannel, s.tgt.ID),
+			Style:   domain.StyleAuto,
+			Content: &domain.MessageContent{Text: md},
+		})
 	})
 	if err != nil {
 		s.setFailed("case① Rich 发送失败: %v", err)
@@ -258,8 +283,8 @@ func (s *smoke) caseRich(ctx context.Context, out *telegram.Outbound) bool {
 	if s.degraded.count() > before {
 		path = "MTProto 降级"
 	}
-	fmt.Printf("· case① 行走路径: %s\n", path)
-	return s.verifyMarker(ctx, marker, "case①")
+	fmt.Printf("· case① 行走路径: %s sent_id=%d\n", path, sent.MessageID)
+	return s.verifySentID(ctx, sent.MessageID, "case①")
 }
 
 // caseLongSplit 长内容（3×16000 字符段落 → 2 块）验证 block 切分实发。
@@ -268,30 +293,37 @@ func (s *smoke) caseLongSplit(ctx context.Context, out *telegram.Outbound) bool 
 	para := func(tag string) string { return "## " + marker + " " + tag + "\n\n" + strings.Repeat("字", 15900) }
 	md := strings.Join([]string{para("p1"), para("p2"), para("p3")}, "\n\n")
 
-	if _, err := out.SendText(ctx, domain.SendRequest{
-		Chat:    domain.NewChatRef(domain.PeerChannel, s.tgt.ID),
-		Style:   domain.StyleAuto,
-		Content: &domain.MessageContent{Text: md},
-	}); err != nil {
+	sent, err := retryFlood(ctx, func() (domain.SentMessage, error) {
+		return out.SendText(ctx, domain.SendRequest{
+			Chat:    domain.NewChatRef(domain.PeerChannel, s.tgt.ID),
+			Style:   domain.StyleAuto,
+			Content: &domain.MessageContent{Text: md},
+		})
+	})
+	if err != nil {
 		s.setFailed("case② 长内容发送失败: %v", err)
 		return false
 	}
-	fmt.Println("· case② 行走路径: 长内容分块（块数见 renderer 输出）")
-	return s.verifyMarker(ctx, marker, "case②")
+	fmt.Printf("· case② 行走路径: 长内容分块 sent_id=%d\n", sent.MessageID)
+	return s.verifySentID(ctx, sent.MessageID, "case②")
 }
 
-// caseForcedFallback 单行 40001 字符（无行边界可切）→ ErrRichUnsendable →
-// 确定性地走 fallback 链（03 §2.7），capability 不应被禁用。
+// caseForcedFallback 17 层嵌套引用（>16 层上限）→ ErrRichUnsendable →
+// 确定性地走 fallback 链（03 §2.7），capability 不应被禁用。选深层引用而非
+// 单行超限：兜底文本仅一行小消息，不受新频道 bot 连发限流制约。
 func (s *smoke) caseForcedFallback(ctx context.Context, out *telegram.Outbound) bool {
 	marker := fmt.Sprintf("RICHSMOKE-C-%d", time.Now().UnixNano())
-	line := marker + " " + strings.Repeat("字", 40000-28) // 单行超 32768 且无换行
+	line := strings.Repeat(">", 17) + " " + marker + " 深层引用（17 层 > 16 上限）"
 
 	before := s.degraded.count()
-	if _, err := out.SendText(ctx, domain.SendRequest{
-		Chat:    domain.NewChatRef(domain.PeerChannel, s.tgt.ID),
-		Style:   domain.StyleAuto,
-		Content: &domain.MessageContent{Text: line},
-	}); err != nil {
+	sent, err := retryFloodN(ctx, 5, func() (domain.SentMessage, error) {
+		return out.SendText(ctx, domain.SendRequest{
+			Chat:    domain.NewChatRef(domain.PeerChannel, s.tgt.ID),
+			Style:   domain.StyleAuto,
+			Content: &domain.MessageContent{Text: line},
+		})
+	})
+	if err != nil {
 		s.setFailed("case③ 强制降级发送失败: %v", err)
 		return false
 	}
@@ -303,12 +335,14 @@ func (s *smoke) caseForcedFallback(ctx context.Context, out *telegram.Outbound) 
 		s.setFailed("case③ 内容超限不应禁用 capability")
 		return false
 	}
-	fmt.Println("· case③ 行走路径: MTProto 降级（ErrRichUnsendable→fallback 链，capability 保持）")
-	return s.verifyMarker(ctx, marker, "case③")
+	fmt.Printf("· case③ 行走路径: MTProto 降级（capability 保持）sent_id=%d\n", sent.MessageID)
+	return s.verifySentID(ctx, sent.MessageID, "case③")
 }
 
-// verifyMarker 轮询 userbot 侧 getHistory 核验 marker 已落到目标频道。
-func (s *smoke) verifyMarker(ctx context.Context, marker, caseName string) bool {
+// verifySentID 轮询 userbot 侧 getHistory 核验发送回执 ID 已落到目标频道。
+// 注：rich payload 对 gotd v0.161 不可见（未知字段被丢弃，历史文本为空），
+// 文本 marker 核验不成立，故按消息 ID 命中判定。
+func (s *smoke) verifySentID(ctx context.Context, sentID int64, caseName string) bool {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		res, err := retryFlood(ctx, func() (tg.MessagesMessagesClass, error) {
@@ -322,7 +356,7 @@ func (s *smoke) verifyMarker(ctx context.Context, marker, caseName string) bool 
 			return false
 		}
 		for _, m := range historyMessages(res) {
-			if strings.Contains(m.Message, marker) {
+			if int64(m.ID) == sentID {
 				fmt.Printf("✓ %s 落点核验: msg_id=%d\n", caseName, m.ID)
 				return true
 			}
@@ -333,8 +367,27 @@ func (s *smoke) verifyMarker(ctx context.Context, marker, caseName string) bool 
 		case <-time.After(2 * time.Second):
 		}
 	}
-	s.setFailed("%s 期限内未在目标频道核验到 marker %s", caseName, marker)
+	// 诊断转储：Rich 消息在历史中的真实形态（渲染后文本/实体）。
+	res, err := retryFlood(ctx, func() (tg.MessagesMessagesClass, error) {
+		return s.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peerOf(s.tgt), Limit: 20})
+	})
+	if err == nil {
+		msgs := historyMessages(res)
+		fmt.Printf("· %s 诊断：历史 %d 条\n", caseName, len(msgs))
+		for _, m := range msgs {
+			excerpt := strings.ReplaceAll(string([]rune(m.Message)[:minInt(60, len([]rune(m.Message)))]), "\n", "⏎")
+			fmt.Printf("  · msg_id=%d len=%d entities=%d %q\n", m.ID, len([]rune(m.Message)), len(m.Entities), excerpt)
+		}
+	}
+	s.setFailed("%s 期限内未在目标频道核验到 msg_id=%d", caseName, sentID)
 	return false
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // cleanup 删除临时频道（-keep 保留现场）。
@@ -358,6 +411,10 @@ func (s *smoke) cleanup() {
 // ---------- Telegram 辅助（与 smoke-forward 同模式；冒烟入口自包含） ----------
 
 func retryFlood[T any](ctx context.Context, f func() (T, error)) (T, error) {
+	return retryFloodN(ctx, 2, f)
+}
+
+func retryFloodN[T any](ctx context.Context, maxRetries int, f func() (T, error)) (T, error) {
 	var zero T
 	for try := 0; ; try++ {
 		v, err := f()
@@ -365,7 +422,7 @@ func retryFlood[T any](ctx context.Context, f func() (T, error)) (T, error) {
 			return v, nil
 		}
 		waited, isFlood := tgerr.AsFloodWait(err)
-		if try >= 2 || !isFlood {
+		if try >= maxRetries || !isFlood {
 			return zero, err
 		}
 		wait := waited + time.Second

@@ -43,10 +43,13 @@ type Outbound struct {
 
 // NewOutbound 构造出站。rich 传 *botapi.Client（TELEGRAM_BOT_TOKEN 同源，
 // ADR-008）启用 Rich 路由；nil 则 Content 一律 MTProto 兜底。
-func NewOutbound(client *telegram.Client, peers PeerResolver, rich *botapi.Client) *Outbound {
+func NewOutbound(client *telegram.Client, peers PeerResolver, rich *botapi.Client, opts ...OutboundOption) *Outbound {
 	o := &Outbound{client: client, peers: peers}
 	if rich != nil {
 		o.rich = newRichRouter(rich, o.sendTextMTProto, nil)
+	}
+	for _, opt := range opts {
+		opt(o)
 	}
 	return o
 }

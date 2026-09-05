@@ -35,6 +35,18 @@ type richRouter struct {
 	reason   string
 }
 
+// OutboundOption 是 Outbound 的可选装配项。
+type OutboundOption func(*Outbound)
+
+// WithLog 注入出站侧结构化日志（Rich 路由降级/capability 告警走此 logger）。
+func WithLog(lg *slog.Logger) OutboundOption {
+	return func(o *Outbound) {
+		if lg != nil && o.rich != nil {
+			o.rich.log = lg
+		}
+	}
+}
+
 func newRichRouter(rich richCaller, plain plainSender, log *slog.Logger) *richRouter {
 	if log == nil {
 		log = slog.Default()
