@@ -350,3 +350,12 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
   - 终轮 PASS：bot/user 连接 ✓、updates 补抓 canonical 落库（2 频道×50）✓、不可访问频道（4 个冒烟残留）停止恢复 R3.1.1 ✓、health 200 ✓、SIGTERM 优雅退出 code=0 ✓、engine 零 OwnFatal ✓。exit 75 机制 U 级已验（T2.0），全链 UI 触发点待 T5.3。
 - **CI 红 1 次**（01c5b5b 修复）：integration tag 文件不在 `go test -race ./...` 覆盖内，ChannelRepo 改名漏改集成测试。**教训**：改 mysql 导出方法必须同步 `go test -race -tags integration ./...` 本地跑过再推。
 - 下一任务：T5.2 webapi 骨架（路由、auth opaque session/Cookie/失败锁定/RemoteAddr、audit 中间件；httptest）。
+
+## 2026-09-05 · 会话 5（续）：T5.2 webapi 骨架完成（83e14f5）
+
+- auth（04 §4 全量）：opaque session（256-bit token/内存 store/12h 固定）、Cookie HttpOnly+SameSite=Strict+Secure(TLS)、恒时凭据比较、同 IP 5 次失败锁 10 分钟（第 5 次失败处理后锁、第 6 次起 429——测试先写成第 5 次 429，按冻结文本「5 次失败锁」字面语义修正测试）、仅 RemoteAddr 不采信 XFF、成功登录/登出写审计。
+- 中间件：requireSession（豁免 health/login）；Handle() 注册的业务路由写方法自动审计（action=method pattern + detail.status，失败仅告警不阻断）。
+- 组合根接线 WithCredentials/WithAuditSink（AuditRepo 结构满足）。
+- ServerOptions 模式 + Handle() 路由注册面 = T5.3 业务 API 的挂载点（须 Run 前注册）。
+- 门禁全绿含本地集成；CI 绿。
+- 下一任务：T5.3 业务 API（settings/forwarding CRUD/backfill/channels/userbot 向导三步复用 UserAuthService/system pause-resume-restart(75)/log-level/audit-logs + WS 日志流；httptest + I）。
