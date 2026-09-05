@@ -475,6 +475,30 @@ func rule(id, srcID, dstID int64) domain.ForwardRule {
 
 // ---------- 基础转发链 ----------
 
+// TestEngineRunCreatesTmpRoot 验证 Run 创建媒体临时根目录（MkdirTemp 要求父目录
+// 存在；tmpRoot 缺失时首个媒体任务必失败——GATE-2 冒烟实证的 T3.6 遗留缺陷）。
+func TestEngineRunCreatesTmpRoot(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	e, _ := newTestEngine(t, nil, snd, dedup, nil, nil)
+	e.tmpRoot = filepath.Join(t.TempDir(), "nested", "sakura-nexus") // 不存在的多级路径
+
+	cancel, _ := startEngine(t, e)
+	defer cancel()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(e.tmpRoot); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat tmpRoot: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Run 未创建 tmpRoot %s", e.tmpRoot)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestEngineTextForwardHappyPath(t *testing.T) {
 	snd, dedup := &fakeSender{}, newFakeForwarded()
 	e, store := newTestEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, snd, dedup, nil, nil)

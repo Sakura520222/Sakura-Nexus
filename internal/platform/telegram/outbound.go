@@ -2,9 +2,12 @@ package telegram
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/uploader"
@@ -12,6 +15,16 @@ import (
 
 	"github.com/Sakura520222/Sakura-Nexus/internal/domain"
 )
+
+// randomID 生成 random_id（Telegram 要求非零且调用间唯一；缺省 0 对 Bot 账号
+// 直接 400 RANDOM_ID_EMPTY，User 账号虽容忍仍应正确填充——GATE-2 冒烟实证）。
+func randomID() int64 {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return time.Now().UnixNano()
+	}
+	return int64(binary.LittleEndian.Uint64(b[:]))
+}
 
 // PeerResolver 将 domain.ChatRef 解析为 MTProto InputPeer（含 access hash——
 // 由引擎注入：bot 账号的 peers 查询走 telegram_peers 表，03 §3.8）。
@@ -175,6 +188,7 @@ func (o *Outbound) SendText(ctx context.Context, req domain.SendRequest) (domain
 			Message:   seg.Text,
 			Entities:  tgEntities(seg.Entities),
 			ReplyTo:   replyHeader(req.ReplyTo),
+			RandomID:  randomID(),
 			NoWebpage: true,
 			Silent:    req.Silent,
 		})
@@ -243,6 +257,7 @@ func (o *Outbound) SendFiles(ctx context.Context, req domain.SendRequest, files 
 			Media:    medias[0],
 			Message:  req.Caption,
 			Entities: tgEntities(req.Entities),
+			RandomID: randomID(),
 			Silent:   req.Silent,
 		})
 		if err != nil {
@@ -308,7 +323,7 @@ func singleMedias(medias []tg.InputMediaClass, caption string, entities []domain
 			c = caption
 			ents = tgEntities(entities)
 		}
-		out[i] = tg.InputSingleMedia{Media: m, Message: c, Entities: ents}
+		out[i] = tg.InputSingleMedia{Media: m, Message: c, Entities: ents, RandomID: randomID()}
 	}
 	return out
 }

@@ -248,10 +248,14 @@ func albumConfigOf(p ForwardingParams) AlbumConfig {
 
 func (e *Engine) Name() string { return "forwarding" }
 
-// Run 装载规则、清理残留临时文件并启动单消费者与相册驱动循环，阻塞至 ctx 取消。
+// Run 装载规则、确保媒体临时根目录存在、清理残留临时文件并启动单消费者与
+// 相册驱动循环，阻塞至 ctx 取消。
 func (e *Engine) Run(ctx context.Context) error {
 	if err := e.RefreshRules(ctx); err != nil {
 		return fmt.Errorf("装载转发规则: %w", err)
+	}
+	if err := os.MkdirAll(e.tmpRoot, 0o700); err != nil {
+		return fmt.Errorf("创建媒体临时根目录: %w", err)
 	}
 	e.cleanupStaleTemp()
 	e.wg.Add(2)

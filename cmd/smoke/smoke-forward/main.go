@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/png"
+	"image/jpeg"
 	"io"
 	"log/slog"
 	"os"
@@ -152,16 +152,25 @@ func main() {
 		sm.api = api
 
 		// ① 自建临时源/目标广播频道（真实频道；默认结束删除）。
+		// 先清扫历史失败运行遗留的孤儿冒烟频道（本冒烟专属标题前缀）。
+		if !*keep {
+			if n, err := sweepSmokeChannels(ctx, api); err != nil {
+				fmt.Printf("⚠ 清扫遗留冒烟频道: %v\n", err)
+			} else if n > 0 {
+				fmt.Printf("✓ 已清扫 %d 个遗留冒烟频道\n", n)
+			}
+		}
 		stamp := time.Now().Format("0102-150405")
 		src, err := createChannel(ctx, api, "Sakura-Nexus Smoke Src "+stamp)
 		if err != nil {
 			return fmt.Errorf("创建源频道: %w", err)
 		}
+		sm.src = src // 即时登记：部分失败路径的清理依赖
 		tgt, err := createChannel(ctx, api, "Sakura-Nexus Smoke Dst "+stamp)
 		if err != nil {
 			return fmt.Errorf("创建目标频道: %w", err)
 		}
-		sm.src, sm.tgt = src, tgt
+		sm.tgt = tgt
 		fmt.Printf("✓ 临时频道: 源=%d 目标=%d\n", src.ID, tgt.ID)
 
 		// ② Bot → 目标频道管理员（获得发帖权）。
@@ -169,11 +178,13 @@ func main() {
 		if err != nil {
 			return fmt.Errorf("解析 bot 账号: %w", err)
 		}
-		if _, err := api.ChannelsEditAdmin(ctx, &tg.ChannelsEditAdminRequest{
-			Channel:     inputChannel(tgt),
-			UserID:      botUser,
-			AdminRights: tg.ChatAdminRights{PostMessages: true, EditMessages: true, DeleteMessages: true, InviteUsers: true},
-			Rank:        "smoke",
+		if _, err := retryFlood(ctx, func() (tg.UpdatesClass, error) {
+			return api.ChannelsEditAdmin(ctx, &tg.ChannelsEditAdminRequest{
+				Channel:     inputChannel(tgt),
+				UserID:      botUser,
+				AdminRights: tg.ChatAdminRights{PostMessages: true, EditMessages: true, DeleteMessages: true, InviteUsers: true},
+				Rank:        "smoke",
+			})
 		}); err != nil {
 			return fmt.Errorf("提升 bot 为目标频道管理员: %w", err)
 		}
@@ -297,11 +308,13 @@ func (s *smoke) runCases() {
 
 func (s *smoke) caseText(ctx context.Context) bool {
 	marker := fmt.Sprintf("GATE2-TEXT-%d", time.Now().UnixNano())
-	res, err := s.api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
-		Peer:     peerOf(s.src),
-		Message:  marker,
-		Entities: []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 6}}, // 验证 entities 透传
-		RandomID: randID(),
+	res, err := retryFlood(ctx, func() (tg.UpdatesClass, error) {
+		return s.api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     peerOf(s.src),
+			Message:  marker,
+			Entities: []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 6}}, // 验证 entities 透传
+			RandomID: randID(),
+		})
 	})
 	if err != nil {
 		s.failCase("① 文本", err)
@@ -323,16 +336,18 @@ func (s *smoke) caseText(ctx context.Context) bool {
 
 func (s *smoke) caseMedia(ctx context.Context) bool {
 	caption := fmt.Sprintf("GATE2-MEDIA-%d", time.Now().UnixNano())
-	file, err := uploadPhoto(ctx, s.api, "smoke-media.png", pngPhoto(color.RGBA{R: 220, G: 60, B: 60, A: 255}))
+	file, err := uploadPhoto(ctx, s.api, "smoke-media.jpg", jpegPhoto(color.RGBA{R: 220, G: 60, B: 60, A: 255}))
 	if err != nil {
 		s.failCase("② 单媒体", err)
 		return false
 	}
-	res, err := s.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-		Peer:     peerOf(s.src),
-		Media:    &tg.InputMediaUploadedPhoto{File: file},
-		Message:  caption,
-		RandomID: randID(),
+	res, err := retryFlood(ctx, func() (tg.UpdatesClass, error) {
+		return s.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			Peer:     peerOf(s.src),
+			Media:    &tg.InputMediaUploadedPhoto{File: file},
+			Message:  caption,
+			RandomID: randID(),
+		})
 	})
 	if err != nil {
 		s.failCase("② 单媒体", err)
@@ -360,7 +375,7 @@ func (s *smoke) caseAlbum(ctx context.Context) bool {
 	}
 	items := make([]tg.InputSingleMedia, 0, len(colors))
 	for i, c := range colors {
-		file, err := uploadPhoto(ctx, s.api, fmt.Sprintf("smoke-album-%d.png", i), pngPhoto(c))
+		file, err := uploadPhoto(ctx, s.api, fmt.Sprintf("smoke-album-%d.jpg", i), jpegPhoto(c))
 		if err != nil {
 			s.failCase("③ 相册", err)
 			return false
@@ -371,9 +386,11 @@ func (s *smoke) caseAlbum(ctx context.Context) bool {
 		})
 	}
 	// 单次 sendMultiMedia = Telegram 侧自动成一个相册（GroupedID 由服务端分配）。
-	res, err := s.api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
-		Peer:       peerOf(s.src),
-		MultiMedia: items,
+	res, err := retryFlood(ctx, func() (tg.UpdatesClass, error) {
+		return s.api.MessagesSendMultiMedia(ctx, &tg.MessagesSendMultiMediaRequest{
+			Peer:       peerOf(s.src),
+			MultiMedia: items,
+		})
 	})
 	if err != nil {
 		s.failCase("③ 相册", err)
@@ -395,7 +412,9 @@ func (s *smoke) caseAlbum(ctx context.Context) bool {
 
 // verifyTarget 经 userbot 读目标频道最近历史，逐 case 核验真实收到。
 func (s *smoke) verifyTarget(ctx context.Context) bool {
-	res, err := s.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peerOf(s.tgt), Limit: 16})
+	res, err := retryFlood(ctx, func() (tg.MessagesMessagesClass, error) {
+		return s.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peerOf(s.tgt), Limit: 16})
+	})
 	if err != nil {
 		s.failCase("目标侧读取", err)
 		return false
@@ -528,7 +547,9 @@ func (s *smoke) doCleanup() {
 		if ch == nil {
 			continue
 		}
-		if _, err := s.api.ChannelsDeleteChannel(cctx, inputChannel(ch)); err != nil {
+		if _, err := retryFlood(cctx, func() (tg.UpdatesClass, error) {
+			return s.api.ChannelsDeleteChannel(cctx, inputChannel(ch))
+		}); err != nil {
 			fmt.Printf("⚠ 删除临时频道 %d: %v\n", ch.ID, err)
 		}
 	}
@@ -633,6 +654,65 @@ func classifyFailure(err error) forwarding.SendFailureKind {
 
 // ---------- Telegram 辅助 ----------
 
+// retryFlood 在 FLOOD_WAIT 时按服务端要求时长等待后重试（最多 3 次尝试；
+// 其余错误直通）。冒烟自建频道/连发用例时 Telegram 限流常见（如建第二频道
+// FLOOD_WAIT_5），不值得为此失败整个冒烟。
+func retryFlood[T any](ctx context.Context, f func() (T, error)) (T, error) {
+	var zero T
+	for try := 0; ; try++ {
+		v, err := f()
+		if err == nil {
+			return v, nil
+		}
+		waited, isFlood := tgerr.AsFloodWait(err)
+		if try >= 2 || !isFlood {
+			return zero, err
+		}
+		wait := waited + time.Second
+		fmt.Printf("· FLOOD_WAIT：%v 后重试\n", wait)
+		select {
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// sweepSmokeChannels 清扫历史失败运行遗留的冒烟频道（专属标题前缀、仅本人
+// 创建的）；返回删除数。部分失败路径（如目标频道创建失败）可能残留孤儿频道。
+func sweepSmokeChannels(ctx context.Context, api *tg.Client) (int, error) {
+	res, err := retryFlood(ctx, func() (tg.MessagesDialogsClass, error) {
+		return api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			OffsetPeer: &tg.InputPeerEmpty{},
+			Limit:      100,
+		})
+	})
+	if err != nil {
+		return 0, fmt.Errorf("getDialogs: %w", err)
+	}
+	var chats []tg.ChatClass
+	switch v := res.(type) {
+	case *tg.MessagesDialogs:
+		chats = v.Chats
+	case *tg.MessagesDialogsSlice:
+		chats = v.Chats
+	}
+	n := 0
+	for _, c := range chats {
+		ch, ok := c.(*tg.Channel)
+		if !ok || !strings.HasPrefix(ch.Title, "Sakura-Nexus Smoke") || !ch.Creator {
+			continue
+		}
+		if _, err := retryFlood(ctx, func() (tg.UpdatesClass, error) {
+			return api.ChannelsDeleteChannel(ctx, inputChannel(ch))
+		}); err != nil {
+			return n, fmt.Errorf("删除遗留频道 %d: %w", ch.ID, err)
+		}
+		n++
+	}
+	return n, nil
+}
+
 func peerOf(c *tg.Channel) *tg.InputPeerChannel {
 	return &tg.InputPeerChannel{ChannelID: c.ID, AccessHash: c.AccessHash}
 }
@@ -642,10 +722,12 @@ func inputChannel(c *tg.Channel) *tg.InputChannel {
 }
 
 func createChannel(ctx context.Context, api *tg.Client, title string) (*tg.Channel, error) {
-	res, err := api.ChannelsCreateChannel(ctx, &tg.ChannelsCreateChannelRequest{
-		Title:     title,
-		About:     "Sakura-Nexus GATE-2 冒烟临时频道",
-		Broadcast: true,
+	res, err := retryFlood(ctx, func() (tg.UpdatesClass, error) {
+		return api.ChannelsCreateChannel(ctx, &tg.ChannelsCreateChannelRequest{
+			Title:     title,
+			About:     "Sakura-Nexus GATE-2 冒烟临时频道",
+			Broadcast: true,
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -667,7 +749,9 @@ func resolveBotUser(ctx context.Context, api *tg.Client, botSelf tg.User) (*tg.I
 	if botSelf.Username == "" {
 		return nil, errors.New("bot 无 username，无法解析")
 	}
-	res, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: botSelf.Username})
+	res, err := retryFlood(ctx, func() (*tg.ContactsResolvedPeer, error) {
+		return api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: botSelf.Username})
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -684,8 +768,10 @@ func resolveBotUser(ctx context.Context, api *tg.Client, botSelf tg.User) (*tg.I
 // （bot 对其成员频道的已知服务端特例）。
 func resolveBotTarget(ctx context.Context, botAPI *tg.Client, channelID int64) (telegram.PeerResolver, string) {
 	var hash int64
-	res, err := botAPI.ChannelsGetChannels(ctx, []tg.InputChannelClass{
-		&tg.InputChannel{ChannelID: channelID},
+	res, err := retryFlood(ctx, func() (tg.MessagesChatsClass, error) {
+		return botAPI.ChannelsGetChannels(ctx, []tg.InputChannelClass{
+			&tg.InputChannel{ChannelID: channelID},
+		})
 	})
 	if err == nil {
 		if chats, ok := res.(*tg.MessagesChats); ok {
@@ -765,8 +851,9 @@ func (f *failureFlag) get() string {
 	return f.msg
 }
 
-// pngPhoto 生成纯色 PNG（冒烟测试图）。
-func pngPhoto(c color.Color) []byte {
+// jpegPhoto 生成纯色 JPEG（冒烟测试图；photo 相册要求真实照片格式——
+// 纯色 PNG 经 sendMultiMedia 会 400 MEDIA_INVALID，GATE-2 冒烟实证）。
+func jpegPhoto(c color.Color) []byte {
 	const size = 96
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
 	for y := 0; y < size; y++ {
@@ -775,7 +862,7 @@ func pngPhoto(c color.Color) []byte {
 		}
 	}
 	var buf bytes.Buffer
-	_ = png.Encode(&buf, img) // 缓冲区编码无失败路径
+	_ = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}) // 缓冲区编码无失败路径
 	return buf.Bytes()
 }
 
