@@ -850,6 +850,26 @@ func sourceIDs(msgs []domain.ChannelMessage) []int64 {
 }
 
 // tempMediaPath 生成媒体临时文件路径（03 §3.9：文件名带 chat_id/message_id 便于排查）。
+// 扩展名不可省：photo 再上传（InputMediaUploadedPhoto）要求文件名带照片扩展，
+// 无扩展名 400 PHOTO_EXT_INVALID（GATE-2 冒烟实证）。
 func tempMediaPath(root string, m domain.ChannelMessage, media domain.MediaRef) string {
-	return filepath.Join(root, fmt.Sprintf("%d_%d_%s", m.Ref.Chat.ID, m.Ref.MessageID, media.Key))
+	return filepath.Join(root, fmt.Sprintf("%d_%d_%s%s", m.Ref.Chat.ID, m.Ref.MessageID, media.Key, mediaExt(media)))
+}
+
+// mediaExt 推导扩展名：优先原始文件名，其次 MimeType，photo 兜底 .jpg。
+func mediaExt(m domain.MediaRef) string {
+	if i := strings.LastIndexByte(m.FileName, '.'); i > 0 {
+		return strings.ToLower(m.FileName[i:])
+	}
+	mimeExts := map[string]string{
+		"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+		"image/gif": ".gif", "video/mp4": ".mp4",
+	}
+	if ext, ok := mimeExts[m.MimeType]; ok {
+		return ext
+	}
+	if m.Type == "photo" {
+		return ".jpg"
+	}
+	return ""
 }

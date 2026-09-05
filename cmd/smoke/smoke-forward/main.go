@@ -851,18 +851,33 @@ func (f *failureFlag) get() string {
 	return f.msg
 }
 
-// jpegPhoto 生成纯色 JPEG（冒烟测试图；photo 相册要求真实照片格式——
-// 纯色 PNG 经 sendMultiMedia 会 400 MEDIA_INVALID，GATE-2 冒烟实证）。
-func jpegPhoto(c color.Color) []byte {
-	const size = 96
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			img.Set(x, y, c)
+// jpegPhoto 生成基色渐变 JPEG（1280×720——接近真实照片形态：小尺寸纯色图
+// 经 sendMultiMedia 会被服务端相册处理拒绝 400 MEDIA_INVALID，单发可过相册
+// 必拒——GATE-2 冒烟两轮实证）。
+func jpegPhoto(c color.RGBA) []byte {
+	const w, h = 1280, 720
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	scale := func(v uint8, k float64) uint8 {
+		x := int(float64(v)*k + 0.5)
+		if x > 255 {
+			x = 255
+		}
+		return uint8(x)
+	}
+	for y := 0; y < h; y++ {
+		vk := float64(y) / float64(h-1)
+		for x := 0; x < w; x++ {
+			hk := float64(x) / float64(w-1)
+			img.SetRGBA(x, y, color.RGBA{
+				R: scale(c.R, 0.6+0.8*hk),
+				G: scale(c.G, 0.6+0.7*vk),
+				B: scale(c.B, 0.5+0.9*(1-hk)),
+				A: 255,
+			})
 		}
 	}
 	var buf bytes.Buffer
-	_ = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}) // 缓冲区编码无失败路径
+	_ = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85}) // 缓冲区编码无失败路径
 	return buf.Bytes()
 }
 

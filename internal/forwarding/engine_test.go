@@ -499,6 +499,29 @@ func TestEngineRunCreatesTmpRoot(t *testing.T) {
 	}
 }
 
+// TestTempMediaPathExtension 验证临时文件名扩展推导（photo 无扩展名再上传
+// 400 PHOTO_EXT_INVALID——GATE-2 冒烟实证）。
+func TestTempMediaPathExtension(t *testing.T) {
+	cases := []struct {
+		name  string
+		media domain.MediaRef
+		want  string
+	}{
+		{"photo 无元数据兜底", domain.MediaRef{Key: "photo:0", Type: "photo"}, "100_1_photo:0.jpg"},
+		{"document 原文件名扩展", domain.MediaRef{Key: "doc:0", FileName: "video.MP4"}, "100_2_doc:0.mp4"},
+		{"mime 推断", domain.MediaRef{Key: "doc:1", MimeType: "image/webp"}, "100_3_doc:1.webp"},
+		{"未知类型无扩展", domain.MediaRef{Key: "doc:2"}, "100_4_doc:2"},
+	}
+	m := domain.ChannelMessage{}
+	m.Ref.Chat = domain.NewChatRef(domain.PeerChannel, 100)
+	for i, c := range cases {
+		m.Ref.MessageID = int64(i + 1)
+		if got, want := tempMediaPath("/tmp", m, c.media), filepath.Join("/tmp", c.want); got != want {
+			t.Errorf("%s: got %s want %s", c.name, got, want)
+		}
+	}
+}
+
 func TestEngineTextForwardHappyPath(t *testing.T) {
 	snd, dedup := &fakeSender{}, newFakeForwarded()
 	e, store := newTestEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, snd, dedup, nil, nil)
