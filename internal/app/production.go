@@ -114,7 +114,10 @@ func Assemble(ctx context.Context, env *config.Env, lg *slog.Logger) (*Productio
 	userSvc := telegram.NewUserService(user, manager, lg)
 	engSvc := &engineService{engine: engine}
 
-	web := webapi.NewServer(env.WebUIHost, env.WebUIPort, lg)
+	web := webapi.NewServer(env.WebUIHost, env.WebUIPort, lg,
+		webapi.WithCredentials(env.WebUIUsername, env.WebUIPassword),
+		webapi.WithAuditSink(mysql.NewAuditRepo(db)),
+	)
 
 	// 6. 注册 lifecycle（启动序 user→bot→engine→web；关闭逆序 web→engine→bot→user）。
 	opts := Options{

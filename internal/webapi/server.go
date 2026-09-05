@@ -23,6 +23,15 @@ type Server struct {
 	port int
 	log  *slog.Logger
 
+	username  string
+	password  string
+	auditSink AuditSink
+	now       func() time.Time
+
+	sessions *sessionStore
+	limiter  *loginLimiter
+	routes   []route
+
 	mu     sync.Mutex
 	srv    *http.Server
 	ln     net.Listener
@@ -31,18 +40,78 @@ type Server struct {
 	closed bool
 }
 
+// ServerOption 是可选装配项（凭据/审计/时钟注入）。
+type ServerOption func(*Server)
+
+// WithCredentials 注入 .env WebUI 凭据（04 §4：恒时比较的比对源）。
+// 未注入 = auth 未配置，除公开路由外全部 401（fail-closed）。
+func WithCredentials(username, password string) ServerOption {
+	return func(s *Server) { s.username, s.password = username, password }
+}
+
+// WithAuditSink 注入审计写入面（04 §2：全部写操作落 system_audit_logs）。
+func WithAuditSink(sink AuditSink) ServerOption {
+	return func(s *Server) { s.auditSink = sink }
+}
+
+// WithNow 注入时钟（会话过期/锁定窗口测试）。
+func WithNow(now func() time.Time) ServerOption {
+	return func(s *Server) { s.now = now }
+}
+
+type route struct {
+	method  string
+	pattern string
+	h       http.HandlerFunc
+}
+
 // NewServer 构造；port 0 = 内核分配（测试）。log nil = slog.Default()。
-func NewServer(host string, port int, log *slog.Logger) *Server {
+func NewServer(host string, port int, log *slog.Logger, opts ...ServerOption) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{
+	s := &Server{
 		host:  host,
 		port:  port,
 		log:   log,
 		ready: make(chan struct{}),
 		start: time.Now(),
+		now:   time.Now,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	s.sessions = newSessionStore(s.now)
+	s.limiter = newLoginLimiter(s.now)
+	return s
+}
+
+// Handle 注册受会话保护的业务路由（写方法自动追加审计；04 §2）。
+// 须在 Run 之前注册（Run 组装路由快照）。
+func (s *Server) Handle(method, pattern string, h http.HandlerFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		s.log.Warn("路由注册晚于关闭，忽略", "pattern", pattern)
+		return
+	}
+	s.routes = append(s.routes, route{method: method, pattern: pattern, h: h})
+}
+
+// handler 组装路由树：公开 = health/login（04 §4 豁免）；其余一律会话保护。
+func (s *Server) handler() http.Handler {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/auth/logout", s.requireSession(s.handleLogout))
+	mux.HandleFunc("GET /api/auth/status", s.requireSession(s.handleStatus))
+	for _, rt := range s.routes {
+		h := s.requireSession(s.auditWrap(rt.method, rt.pattern, rt.h))
+		mux.HandleFunc(rt.method+" "+rt.pattern, h)
+	}
+	return mux
 }
 
 // Name 实现 app.Service。
@@ -68,26 +137,17 @@ func (s *Server) Run(ctx context.Context) error {
 		s.mu.Unlock()
 		return errors.New("webserver 已关闭，不可重启")
 	}
-	mux := http.NewServeMux()
-	// /api/health 公开无鉴权（01 §1.5；Docker HEALTHCHECK 消费）。
-	// status 聚合（degraded/down）与组件细项在 T5.2/T5.3 完善形状。
-	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":         "ok",
-			"version":        versionString(),
-			"uptime_seconds": time.Since(s.start).Seconds(),
-		})
-	})
+	s.mu.Unlock()
 
+	h := s.handler() // handler() 内部取锁——必须在 s.mu 临界区外组装
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", s.host, s.port))
 	if err != nil {
-		s.mu.Unlock()
 		return fmt.Errorf("webserver 监听: %w", err)
 	}
+	s.mu.Lock()
 	s.ln = ln
-	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	s.mu.Unlock()
+	s.srv = &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
 
 	close(s.ready) // readiness barrier 信号（恰好一次）
 	s.log.Info("webserver 监听", "addr", ln.Addr().String())
@@ -121,6 +181,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	sctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(sctx)
+}
+
+// handleHealth 公开无鉴权（01 §1.5；Docker HEALTHCHECK 消费）。
+// status 聚合（degraded/down）在 T5.3 接入组件状态后完善。
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":         "ok",
+		"version":        versionString(),
+		"uptime_seconds": time.Since(s.start).Seconds(),
+	})
 }
 
 func versionString() string {
