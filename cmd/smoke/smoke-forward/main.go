@@ -212,7 +212,7 @@ func main() {
 		engine := forwarding.NewEngine(forwarding.EngineDeps{
 			Rules:        mysql.NewForwardRuleRepo(db),
 			Dedup:        mysql.NewForwardedRepo(db),
-			Sender:       telegram.NewOutbound(bot.Raw(), botPeers),
+			Sender:       telegram.NewOutbound(bot.Raw(), botPeers, nil),
 			Media:        telegram.NewMediaDownloader(user, userPeers, 2<<30, lg),
 			AssistantBot: botSelf.Username,
 			Classify:     classifyFailure,

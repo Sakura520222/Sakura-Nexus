@@ -14,6 +14,7 @@ import (
 	"github.com/gotd/td/tg"
 
 	"github.com/Sakura520222/Sakura-Nexus/internal/domain"
+	"github.com/Sakura520222/Sakura-Nexus/internal/platform/botapi"
 )
 
 // randomID 生成 random_id（Telegram 要求非零且调用间唯一；缺省 0 对 Bot 账号
@@ -32,15 +33,30 @@ type PeerResolver interface {
 	InputPeer(ctx context.Context, ref domain.ChatRef) (tg.InputPeerClass, error)
 }
 
-// Outbound 是 Bot 出站的 MTProto 实现（03 §3.3 三态发送；Rich 路由在 T4.3 接入）。
+// Outbound 是 Bot 出站统一实现（01 §4.2：内部路由 MTProto / Bot API Rich），
 // 通过 Go structural typing 满足 forwarding.Sender 最小接口（01 §2.3）。
 type Outbound struct {
 	client *telegram.Client
 	peers  PeerResolver
+	rich   *richRouter // Rich 路由（T4.3）；nil = 未接线（全部走 MTProto）
 }
 
-func NewOutbound(client *telegram.Client, peers PeerResolver) *Outbound {
-	return &Outbound{client: client, peers: peers}
+// NewOutbound 构造出站。rich 传 *botapi.Client（TELEGRAM_BOT_TOKEN 同源，
+// ADR-008）启用 Rich 路由；nil 则 Content 一律 MTProto 兜底。
+func NewOutbound(client *telegram.Client, peers PeerResolver, rich *botapi.Client) *Outbound {
+	o := &Outbound{client: client, peers: peers}
+	if rich != nil {
+		o.rich = newRichRouter(rich, o.sendTextMTProto, nil)
+	}
+	return o
+}
+
+// RichCapability 返回 Rich 通道可用性与原因（03 §2.9；WebUI 系统页 T5.3 消费）。
+func (o *Outbound) RichCapability() (enabled bool, reason string) {
+	if o.rich == nil {
+		return false, "rich 未接线"
+	}
+	return o.rich.capability()
 }
 
 // tgEntity 将领域 Entity 映射回 gotd 实体（转发复制：原 entities 透传）。
@@ -171,9 +187,21 @@ func (o *Outbound) inputPeer(ctx context.Context, ref domain.ChatRef) (tg.InputP
 	return o.peers.InputPeer(ctx, ref)
 }
 
-// SendText 发送纯文本（entities 透传；>4096 按 entity 边界分段）。
-// 返回首段 SentMessage（后续段日志记录，03 §3.3 ①）。
+// SendText 是文本发送路由入口（01 §4.2）：Content != nil 且非 StylePlain →
+// Rich 通道（内含 fallback 链）；否则 MTProto。
 func (o *Outbound) SendText(ctx context.Context, req domain.SendRequest) (domain.SentMessage, error) {
+	if req.Content != nil && req.Style != domain.StylePlain && o.rich != nil {
+		return o.rich.send(ctx, req)
+	}
+	return o.sendTextMTProto(ctx, req)
+}
+
+// sendTextMTProto 发送纯文本（entities 透传；>4096 按 entity 边界分段）。
+// 返回首段 SentMessage（后续段日志记录，03 §3.3 ①）。
+func (o *Outbound) sendTextMTProto(ctx context.Context, req domain.SendRequest) (domain.SentMessage, error) {
+	if req.Text == "" && req.Content != nil {
+		req.Text = req.Content.Text // StylePlain+Content 或降级形态
+	}
 	peer, err := o.inputPeer(ctx, req.Chat)
 	if err != nil {
 		return domain.SentMessage{}, err
