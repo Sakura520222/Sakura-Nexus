@@ -1632,3 +1632,23 @@ func lastCursorRule(id, srcID, dstID, cursor int64) domain.ForwardRule {
 	r.LastMessageID = cursor
 	return r
 }
+
+// AssistantBotFn 优先于静态 AssistantBot（T5.1：bot username 登录后才可知，
+// 接线方注入运行时来源）。
+func TestEngineAssistantBotFn(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	r := rule(1, 100, 200)
+	r.CustomFooter = "@{assistant_bot}"
+	e, _ := newTestEngine(t, []domain.ForwardRule{r}, snd, dedup, nil, footerChannels())
+	e.deps.AssistantBot = ""
+	e.deps.AssistantBotFn = func() string { return "fn_bot" }
+	startEngine(t, e)
+
+	e.HandleNew(context.Background(), textMsg(100, 7, "body"))
+	waitSignal(t, dedup.recorded, "fn 底栏转发完成")
+
+	calls := snd.textCalls()
+	if len(calls) != 1 || calls[0].Text != "body\n\n@fn_bot" {
+		t.Errorf("AssistantBotFn 底栏不符: %+v", calls)
+	}
+}

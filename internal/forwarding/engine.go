@@ -147,11 +147,14 @@ type EngineDeps struct {
 	Channels     ChannelSource   // 可选；nil 时规则 username 辅助列不参与匹配
 	Rewriter     Rewriter        // 可选；nil 时 ai_enabled 规则直发原文（03 §3.2 ⑧）
 	AssistantBot string          // {assistant_bot} 占位符取值（接线方传 Bot username）
-	History      HistoryFetcher  // 可选；nil 时 Backfill 报错（T3.9 前置）
-	Classify     FailureClassifier
-	RandomSource func() float64 // 可选；nil = math/rand 全局源
-	TmpDir       string         // 媒体临时文件根目录；"" = 系统临时目录 sakura-nexus/（03 §3.9）
-	Log          *slog.Logger
+	// AssistantBotFn 运行时来源，非 nil 时优先于 AssistantBot（T5.1：bot
+	// username 登录后才可知，接线方注入原子持有者的读取函数）。
+	AssistantBotFn func() string
+	History        HistoryFetcher // 可选；nil 时 Backfill 报错（T3.9 前置）
+	Classify       FailureClassifier
+	RandomSource   func() float64 // 可选；nil = math/rand 全局源
+	TmpDir         string         // 媒体临时文件根目录；"" = 系统临时目录 sakura-nexus/（03 §3.9）
+	Log            *slog.Logger
 }
 
 // Engine 是转发引擎编排核心（03 §3.1–§3.5）：事件入口 → 相册聚合分支 → 规则匹配 →
@@ -611,11 +614,15 @@ func (e *Engine) appendFooter(ctx context.Context, t *sendTask) {
 	if tmpl == "" {
 		return
 	}
+	assistant := e.deps.AssistantBot
+	if e.deps.AssistantBotFn != nil {
+		assistant = e.deps.AssistantBotFn()
+	}
 	fc := FooterContext{
 		Source:       t.msgs[0].Ref.Chat,
 		Target:       t.rule.Target,
 		MessageID:    minMessageID(t.msgs),
-		AssistantBot: e.deps.AssistantBot,
+		AssistantBot: assistant,
 	}
 	if e.deps.Channels != nil {
 		if ch, ok, err := e.deps.Channels.Get(ctx, fc.Source.ID); err != nil {

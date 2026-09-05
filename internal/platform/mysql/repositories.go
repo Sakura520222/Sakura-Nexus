@@ -58,7 +58,7 @@ func (r *ChannelRepo) List(ctx context.Context) ([]domain.Channel, error) {
 	return out, nil
 }
 
-func (r *ChannelRepo) GetByTgID(ctx context.Context, tgID int64) (domain.Channel, bool, error) {
+func (r *ChannelRepo) Get(ctx context.Context, tgID int64) (domain.Channel, bool, error) {
 	var row struct {
 		TgID             int64   `db:"tg_id"`
 		Username         *string `db:"username"`
