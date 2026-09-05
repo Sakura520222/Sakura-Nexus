@@ -30,6 +30,8 @@ type Deps struct {
 	Channels ChannelAdmin
 	// Stats：转发统计读取（GET /forwarding/stats）。
 	Stats StatsReader
+	// Userbot：向导三步 + 状态/退出/加入（04 §2 userbot 组）。
+	Userbot UserbotControl
 }
 
 // StatsReader 是统计读取最小面（mysql.ForwardedRepo 结构满足）。
@@ -75,6 +77,10 @@ func WithDeps(d Deps) ServerOption {
 	return func(s *Server) {
 		s.deps = &d
 		s.registerSystemRoutes()
+		s.registerForwardingChannelsRoutes()
+		if d.Userbot != nil {
+			s.registerUserbotRoutes()
+		}
 	}
 }
 
@@ -92,7 +98,6 @@ func (s *Server) registerSystemRoutes() {
 	s.Handle("GET", "/api/system/audit-logs", s.handleAuditLogs)
 	s.Handle("GET", "/api/settings/{scope}", s.handleSettingsGet)
 	s.Handle("PUT", "/api/settings/{scope}", s.handleSettingsPut)
-	s.registerForwardingChannelsRoutes()
 }
 
 // handleSystemStatus 组件细项与运行状态（01 §1.5：鉴权后）。

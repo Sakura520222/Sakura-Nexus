@@ -3,8 +3,10 @@ package telegram
 import (
 	"context"
 
+	"fmt"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
+	"strings"
 )
 
 // UserClient 是真实账号（User）的 gotd MTProto 客户端（ADR-001：唯一抓取者，
@@ -57,4 +59,33 @@ func (u *UserClient) Authorized(ctx context.Context) (bool, error) {
 // Self 返回当前已认证身份。
 func (u *UserClient) Self(ctx context.Context) (*tg.User, error) {
 	return u.client.Self(ctx)
+}
+
+// Logout 退出当前账号（服务端 session 失效；WebUI userbot/logout 消费）。
+func (u *UserClient) Logout(ctx context.Context) error {
+	_, err := u.client.API().AuthLogOut(ctx)
+	return err
+}
+
+// JoinChannel 公开频道加入（03 §3.8：规则保存时源频道预检/自动加入）。
+func (u *UserClient) JoinChannel(ctx context.Context, username string) error {
+	res, err := u.client.API().ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
+		Username: strings.TrimPrefix(username, "@"),
+	})
+	if err != nil {
+		return fmt.Errorf("解析频道 %s: %w", username, err)
+	}
+	for _, c := range res.Chats {
+		ch, ok := c.(*tg.Channel)
+		if !ok {
+			continue
+		}
+		if _, err := u.client.API().ChannelsJoinChannel(ctx, &tg.InputChannel{
+			ChannelID: ch.ID, AccessHash: ch.AccessHash,
+		}); err != nil {
+			return fmt.Errorf("加入频道 %s: %w", username, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("解析频道 %s: 未返回频道实体", username)
 }

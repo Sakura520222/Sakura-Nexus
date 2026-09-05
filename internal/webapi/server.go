@@ -14,6 +14,8 @@ import (
 	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/Sakura520222/Sakura-Nexus/internal/logging"
 )
 
 // Server 是 WebServer 服务（01 §1.1 步骤 6：普通注册 service，CORE）。
@@ -32,6 +34,7 @@ type Server struct {
 	limiter  *loginLimiter
 	routes   []route
 	deps     *Deps
+	ring     *logging.Ring
 
 	mu     sync.Mutex
 	srv    *http.Server
@@ -88,7 +91,8 @@ func NewServer(host string, port int, log *slog.Logger, opts ...ServerOption) *S
 }
 
 // Handle 注册受会话保护的业务路由（写方法自动追加审计；04 §2）。
-// 须在 Run 之前注册（Run 组装路由快照）。
+// 须在 Run 之前注册（Run 组装路由快照）。GET/读路由不包审计记录器——
+// statusRecorder 不实现 http.Hijacker，会破坏 WS 升级（Accept 劫持失败）。
 func (s *Server) Handle(method, pattern string, h http.HandlerFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,7 +100,10 @@ func (s *Server) Handle(method, pattern string, h http.HandlerFunc) {
 		s.log.Warn("路由注册晚于关闭，忽略", "pattern", pattern)
 		return
 	}
-	s.routes = append(s.routes, route{method: method, pattern: pattern, h: h})
+	if isWriteMethod(method) {
+		h = s.auditWrap(method, pattern, h)
+	}
+	s.routes = append(s.routes, route{method: method, pattern: pattern, h: s.requireSession(h)})
 }
 
 // handler 组装路由树：公开 = health/login（04 §4 豁免）；其余一律会话保护。
@@ -109,8 +116,7 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/logout", s.requireSession(s.handleLogout))
 	mux.HandleFunc("GET /api/auth/status", s.requireSession(s.handleStatus))
 	for _, rt := range s.routes {
-		h := s.requireSession(s.auditWrap(rt.method, rt.pattern, rt.h))
-		mux.HandleFunc(rt.method+" "+rt.pattern, h)
+		mux.HandleFunc(rt.method+" "+rt.pattern, rt.h)
 	}
 	return mux
 }

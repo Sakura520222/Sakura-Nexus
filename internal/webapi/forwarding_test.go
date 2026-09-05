@@ -294,3 +294,84 @@ func TestChannelsCRUD(t *testing.T) {
 		t.Errorf("channel delete 应生效: %d", resp.StatusCode)
 	}
 }
+
+// ---------- userbot 向导（04 §2 userbot 组） ----------
+
+type fakeUserbot struct {
+	authorized bool
+	username   string
+	tgID       int64
+
+	startPhone  string
+	codeErr     error
+	pwRequired  bool
+	logoutCount int
+	joined      []string
+}
+
+func (f *fakeUserbot) Status(context.Context) (bool, string, int64, error) {
+	return f.authorized, f.username, f.tgID, nil
+}
+func (f *fakeUserbot) LoginStart(_ context.Context, phone string) (string, error) {
+	f.startPhone = phone
+	return "req-1", nil
+}
+func (f *fakeUserbot) LoginCode(context.Context, string, string) (bool, error) {
+	return f.pwRequired, f.codeErr
+}
+func (f *fakeUserbot) LoginPassword(context.Context, string, string) error { return nil }
+func (f *fakeUserbot) Logout(context.Context) error                        { f.logoutCount++; return nil }
+func (f *fakeUserbot) Join(_ context.Context, chat string) error {
+	f.joined = append(f.joined, chat)
+	return nil
+}
+
+func TestUserbotWizardFlow(t *testing.T) {
+	ub := &fakeUserbot{authorized: true, username: "let_moonlet", tgID: 6826794184}
+	srv := NewServer("127.0.0.1", 0, nil,
+		WithCredentials("admin", "pw-secret"),
+		WithDeps(Deps{Userbot: ub}),
+	)
+	ts, client := loginAndServe(t, srv)
+
+	// status（已授权形态）。
+	resp, rbody := doJSON(t, client, "GET", ts.URL+"/api/userbot/status", "")
+	if resp.StatusCode != http.StatusOK ||
+		!strings.Contains(rbody, `"authorized":true`) ||
+		!strings.Contains(rbody, `"username":"let_moonlet"`) ||
+		!strings.Contains(rbody, `"id":"6826794184"`) {
+		t.Fatalf("status 不符: %d %s", resp.StatusCode, rbody)
+	}
+
+	// start：电话号透传 + requestId 返回。
+	resp, rbody = doJSON(t, client, "POST", ts.URL+"/api/userbot/login/start", `{"phone":"+8613800138000"}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(rbody, `"requestId":"req-1"`) {
+		t.Fatalf("start 不符: %d %s", resp.StatusCode, rbody)
+	}
+	if ub.startPhone != "+8613800138000" {
+		t.Errorf("电话号未透传: %q", ub.startPhone)
+	}
+
+	// code：password_required 分支。
+	ub.pwRequired = true
+	resp, rbody = doJSON(t, client, "POST", ts.URL+"/api/userbot/login/code", `{"requestId":"req-1","code":"12345"}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(rbody, "password_required") {
+		t.Fatalf("code 应返回 password_required: %d %s", resp.StatusCode, rbody)
+	}
+
+	// password。
+	resp, rbody = doJSON(t, client, "POST", ts.URL+"/api/userbot/login/password", `{"requestId":"req-1","password":"pw"}`)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(rbody, `"authorized"`) {
+		t.Fatalf("password 应完成: %d %s", resp.StatusCode, rbody)
+	}
+
+	// join + logout。
+	resp, _ = doJSON(t, client, "POST", ts.URL+"/api/userbot/join", `{"chat":"@srcfoo"}`)
+	if resp.StatusCode != http.StatusOK || len(ub.joined) != 1 || ub.joined[0] != "@srcfoo" {
+		t.Errorf("join 应生效: %d %+v", resp.StatusCode, ub.joined)
+	}
+	resp, _ = doJSON(t, client, "POST", ts.URL+"/api/userbot/logout", "")
+	if resp.StatusCode != http.StatusOK || ub.logoutCount != 1 {
+		t.Errorf("logout 应生效: %d", resp.StatusCode)
+	}
+}

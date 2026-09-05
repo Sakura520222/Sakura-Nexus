@@ -133,6 +133,7 @@ func Assemble(ctx context.Context, env *config.Env) (*Production, error) {
 	web := webapi.NewServer(env.WebUIHost, env.WebUIPort, lg,
 		webapi.WithCredentials(env.WebUIUsername, env.WebUIPassword),
 		webapi.WithAuditSink(mysql.NewAuditRepo(db)),
+		webapi.WithLogRing(ring),
 	)
 
 	// 6. 注册 lifecycle（启动序 user→bot→engine→web；关闭逆序 web→engine→bot→user）。
@@ -154,6 +155,24 @@ func Assemble(ctx context.Context, env *config.Env) (*Production, error) {
 		aiHolder.Store(aiHolder.build())
 	})
 
+	// userbot 向导（04 §2；独立连接跑登录流，状态经主 user 客户端查询）。
+	wizard := telegram.NewWizardService(int(env.TelegramAPIID), env.TelegramAPIHash,
+		mysql.NewSessionStorage(db, "user"),
+		func(ctx context.Context) (bool, string, int64, error) {
+			authed, err := user.Authorized(ctx)
+			if err != nil {
+				return false, "", 0, err
+			}
+			username, id := "", int64(0)
+			if authed {
+				if self, err := user.Self(ctx); err == nil {
+					username, id = self.Username, self.ID
+				}
+			}
+			return authed, username, id, nil
+		}, lg)
+	userbot := &userbotControl{wizard: wizard, user: user}
+
 	// WebAPI 业务依赖（04 §2；webapi 侧只见消费方最小接口）。
 	web.ApplyDeps(webapi.Deps{
 		Settings:       settingsAdapter{center},
@@ -161,6 +180,7 @@ func Assemble(ctx context.Context, env *config.Env) (*Production, error) {
 		Rules:          ruleRepo,
 		Channels:       channelRepo,
 		Stats:          dedupRepo,
+		Userbot:        userbot,
 		RequestRestart: a.RequestRestart,
 		SetLogLevel: func(level string) error {
 			l, err := parseLevelStrict(level)
@@ -215,6 +235,35 @@ func parseLevelStrict(s string) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("非法日志级别: %q（debug|info|warn|error）", s)
 	}
+}
+
+// userbotControl 组合 WizardService（向导三步）与主 user 客户端
+// （status/logout/join），满足 webapi.UserbotControl。
+type userbotControl struct {
+	wizard *telegram.WizardService
+	user   *telegram.UserClient
+}
+
+func (c *userbotControl) Status(ctx context.Context) (bool, string, int64, error) {
+	return c.wizard.Status(ctx)
+}
+
+func (c *userbotControl) LoginStart(ctx context.Context, phone string) (string, error) {
+	return c.wizard.LoginStart(ctx, phone)
+}
+
+func (c *userbotControl) LoginCode(ctx context.Context, requestID, code string) (bool, error) {
+	return c.wizard.LoginCode(ctx, requestID, code)
+}
+
+func (c *userbotControl) LoginPassword(ctx context.Context, requestID, password string) error {
+	return c.wizard.LoginPassword(ctx, requestID, password)
+}
+
+func (c *userbotControl) Logout(ctx context.Context) error { return c.user.Logout(ctx) }
+
+func (c *userbotControl) Join(ctx context.Context, chat string) error {
+	return c.user.JoinChannel(ctx, chat)
 }
 
 // settingsAdapter 把 *config.SettingsCenter 适配为 webapi.SettingsControl
