@@ -288,3 +288,19 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - **附带实证**：上轮已删除频道触发 recovery `CHANNEL_PRIVATE` → 「频道不可访问→停止该频道恢复」路径按 R3.1.1 语义真实工作；建频道 FLOOD_WAIT_5/6 → 冒烟重试机制验证。
 - **前瞻接线**（T5.1 备忘新增）：BotClient.Raw() 已为 Outbound 接线就位；相册注册路径（uploadMedia）已生产化；smoke 侧最小 tgerr 分类器待 T5.1 扩展为完整 permanent 映射。
 - **GATE-2 宣告 PASS**（T3.4/T3.6 的 S 冒烟同批由 case①② 覆盖）→ 下一任务 Phase 4 T4.1（platform/botapi）。
+
+## 2026-09-05 · 会话 4：T4.1 platform/botapi 完成（fake server 单测，72bcc19）
+
+- **交付**（internal/platform/botapi，U=fake server）：
+  1. **ChatID 三态编码**（chat.go 冻结式）：user→+ID、chat→-ID、channel→-(1e12+ID)；拒绝非正 ID（防二次编码）与未知 PeerKind。
+  2. **Call 通用方法调用**：POST JSON → `<base>/bot<token>/<method>`，统一封套（ok/result/error_code/description/parameters）解析；**APIError 原样透出 Method/Code/Description**——T4.3 lazy capability detection 按 Telegram 错误语义判定的输入（03 §2.9），客户端不写死语义。
+  3. **§1.4 重试矩阵**：429 服从 `retry_after + 1s`（body `parameters.retry_after` 优先、`Retry-After` 头回退、皆缺按 0→入睡保底 +1s）；5xx/网络错误指数退避 1/2/4s（网络错误经 transportError 与 5xx 同行）；**共享重试预算上限 3 次**（初次 + 3 重试；任一错误类型不越「上限 3 次」），超限 = failed + 可补发。
+  4. **06 §5 token 脱敏**：传输错误经 url.Error 重组（`Op method: cause`）剥离 URL；sanitizeStr 双保险；重试 warn 日志同样脱敏；默认传输 Timeout 30s。
+- **解释性决策**（冻结文本解释，非偏离，已写入代码注释）：
+  1. 「重试上限 3 次」= 初次尝试之外至多 3 次重试（5xx 行「1/2/4s」三元素与三次重试自洽；ai 包「3 次」= 3 次尝试是其行文无退避序列所致，两者各按本行语义）。
+  2. 429 与 5xx/网络错误**共用**同一 3 次重试预算（两行各自上限均被满足，总次数有界）。
+  3. retry_after 提取三级回退（body→header→0）。
+  4. Rich 参数结构体（chat_id/rich_message/reply_parameters/reply_markup 等映射）**留给 T4.3** 与路由同交——T4.1 只交付传输层 Call，接口不因后续扩展而破坏。
+- **TDD 过程**：逐行为 RED-GREEN；两处测试先绿后补**变异验证**——5xx 退避序列测试（破坏 2^k 退避→红）与 token 脱敏测试（注入含 token 的 RoundTripper 错误 + 破坏 sanitizeStr→红）。教训：429 场景的错误文本天然不含 token，脱敏测试必须走真正可能出现 token 的传输错误路径才有效。
+- **门禁**：gofmt 空 / golangci-lint 0 issues / `go test -race ./...` 全量绿；CI 33954114759 待终态。
+- **下一任务**：T4.2 RichMarkdownNormalizer + validator + block 切分（32768/500/16 层/50 媒体/20 列），golden 样例（07 §1.1 边界集），依赖 T4.1 ✅。
