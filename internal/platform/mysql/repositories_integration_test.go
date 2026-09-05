@@ -39,7 +39,7 @@ func TestChannelRepoUpsertList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, ok, err := repo.GetByTgID(ctx, 777001)
+	got, ok, err := repo.Get(ctx, 777001)
 	if err != nil || !ok {
 		t.Fatalf("Get: ok=%v err=%v", ok, err)
 	}
@@ -64,7 +64,7 @@ func TestChannelRepoUpsertList(t *testing.T) {
 	if err := repo.Delete(ctx, 777001); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := repo.GetByTgID(ctx, 777001); ok {
+	if _, ok, _ := repo.Get(ctx, 777001); ok {
 		t.Error("删除后不应存在")
 	}
 }
