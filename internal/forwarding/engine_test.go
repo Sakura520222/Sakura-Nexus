@@ -1652,3 +1652,37 @@ func TestEngineAssistantBotFn(t *testing.T) {
 		t.Errorf("AssistantBotFn 底栏不符: %+v", calls)
 	}
 }
+
+// ---------- T5.3：system pause/resume ----------
+
+func TestEnginePauseDropsAndResumes(t *testing.T) {
+	snd, dedup := &fakeSender{}, newFakeForwarded()
+	e, _ := newTestEngine(t, []domain.ForwardRule{rule(1, 100, 200)}, snd, dedup, nil, nil)
+	startEngine(t, e)
+
+	// 暂停：HandleNew 即返回（不入队、不发送、不写 dedup——cursor 不推进，
+	// 恢复后由 Backfill 按水位补发，§6 语义天然覆盖）。
+	e.Pause()
+	if !e.Paused() {
+		t.Fatal("Pause 后应处于暂停态")
+	}
+	e.HandleNew(context.Background(), textMsg(100, 10, "暂停期消息"))
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) && snd.callCount() > 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if snd.callCount() != 0 {
+		t.Fatalf("暂停期不应发送: %+v", snd.textCalls())
+	}
+
+	// 恢复：新消息照常流转。
+	e.Resume()
+	if e.Paused() {
+		t.Fatal("Resume 后应恢复")
+	}
+	e.HandleNew(context.Background(), textMsg(100, 11, "恢复期消息"))
+	waitSignal(t, dedup.recorded, "恢复后转发完成")
+	if snd.callCount() != 1 {
+		t.Fatalf("恢复后应恰好一次发送: %d", snd.callCount())
+	}
+}

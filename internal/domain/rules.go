@@ -35,6 +35,15 @@ type ForwardRule struct {
 }
 
 // AuditEntry 是 WebUI/命令/system 的审计记录（02 §2.8）。
+// ForwardingStat 是 forwarding_stats 的读取形态（按规则与日期聚合，04 §2
+// GET /api/forwarding/stats 的行）。
+type ForwardingStat struct {
+	RuleID    int64  `db:"rule_id" json:"ruleId"`
+	Date      string `db:"stat_date" json:"date"` // YYYY-MM-DD（DTO 时间约定 ISO 8601）
+	Forwarded int64  `db:"forwarded_count" json:"forwarded"`
+	Failed    int64  `db:"failed_count" json:"failed"`
+}
+
 type AuditEntry struct {
 	Actor  string         `json:"actor"` // webui:<username> / tg:<user_id> / system
 	Action string         `json:"action"`

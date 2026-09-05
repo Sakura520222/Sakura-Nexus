@@ -175,6 +175,7 @@ type Engine struct {
 	sleep func(ctx context.Context, d time.Duration) bool // false = ctx 取消
 
 	params atomic.Pointer[ForwardingParams]
+	paused atomic.Bool
 
 	albumMu  sync.Mutex
 	album    *AlbumAggregator
@@ -316,6 +317,12 @@ func (e *Engine) ApplySettings(p ForwardingParams) {
 // 相册消息经聚合分支暂存，整组就绪后进入规则处理；单条消息直接处理。
 // 队列满时阻塞（01 §5.2 阻塞背压：转发不允许丢）。
 func (e *Engine) HandleNew(ctx context.Context, m domain.ChannelMessage) {
+	if e.Paused() {
+		// system pause（04 §2）：消息 canonical 已存、cursor 不推进——恢复后经
+		// Backfill 按水位补发（§6），不存在静默丢失。
+		e.log.Warn("转发已暂停，消息跳过处理（恢复后 Backfill 补发）", "chat", m.Ref.Chat, "msg", m.Ref.MessageID)
+		return
+	}
 	if m.GroupedID != 0 {
 		e.albumMu.Lock()
 		group, ready := e.album.Add(m)
@@ -330,6 +337,15 @@ func (e *Engine) HandleNew(ctx context.Context, m domain.ChannelMessage) {
 
 // QueueLen 返回当前队列长度（诊断）。
 func (e *Engine) QueueLen() int { return len(e.queue) }
+
+// Pause 暂停转发处理（04 §2 POST /system/pause）：HandleNew 即返回。
+func (e *Engine) Pause() { e.paused.Store(true) }
+
+// Resume 恢复处理（04 §2 POST /system/resume）。
+func (e *Engine) Resume() { e.paused.Store(false) }
+
+// Paused 返回当前暂停态（WebUI system/status 消费）。
+func (e *Engine) Paused() bool { return e.paused.Load() }
 
 // BackfillResult 是一次回溯补发的结果摘要。
 type BackfillResult struct {

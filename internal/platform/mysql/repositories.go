@@ -313,6 +313,30 @@ func (r *ForwardedRepo) Record(ctx context.Context, src domain.MessageRef, targe
 	return nil
 }
 
+// Stats 返回最近 days 天（含当日）按规则与日期的成败计数；ruleID=0 查全部
+// （04 §2 GET /api/forwarding/stats?rule_id&days）。
+func (r *ForwardedRepo) Stats(ctx context.Context, ruleID int64, days int) ([]domain.ForwardingStat, error) {
+	if days <= 0 || days > 366 {
+		days = 30
+	}
+	q := `
+		SELECT rule_id, DATE_FORMAT(stat_date, '%Y-%m-%d') AS stat_date,
+		       forwarded_count, failed_count
+		FROM forwarding_stats
+		WHERE stat_date >= CURDATE() - INTERVAL ? DAY`
+	args := []any{days}
+	if ruleID > 0 {
+		q += " AND rule_id = ?"
+		args = append(args, ruleID)
+	}
+	q += " ORDER BY stat_date, rule_id"
+	var rows []domain.ForwardingStat
+	if err := r.db.SelectContext(ctx, &rows, q, args...); err != nil {
+		return nil, fmt.Errorf("查询转发统计: %w", err)
+	}
+	return rows, nil
+}
+
 // CleanupBefore 删除早于保留期的去重记录（维护任务）。
 func (r *ForwardedRepo) CleanupBefore(ctx context.Context, retention time.Duration) (int64, error) {
 	res, err := r.db.ExecContext(ctx, `

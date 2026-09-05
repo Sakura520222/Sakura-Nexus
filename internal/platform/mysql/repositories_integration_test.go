@@ -251,3 +251,50 @@ func TestAuditRepoAppend(t *testing.T) {
 			"DELETE FROM system_audit_logs WHERE actor='webui:admin' AND action='rule.create'")
 	})
 }
+
+// TestForwardedRepoStatsRead：Stats 读取（T5.3 GET /api/forwarding/stats）——
+// rule_id 过滤与全量两形态、日期格式。
+func TestForwardedRepoStatsRead(t *testing.T) {
+	db, ctx := testMigratedDB(t)
+	repo := NewForwardedRepo(db)
+	for _, tc := range []struct {
+		ruleID    int64
+		forwarded bool
+	}{
+		{1, true}, {1, true}, {1, false}, {2, true},
+	} {
+		if err := repo.IncrStats(ctx, tc.ruleID, tc.forwarded); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 全量。
+	all, err := repo.Stats(ctx, 0, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sumF, sumX int64
+	for _, s := range all {
+		sumF += s.Forwarded
+		sumX += s.Failed
+		if len(s.Date) != 10 || s.Date[4] != '-' {
+			t.Errorf("日期格式应 YYYY-MM-DD: %q", s.Date)
+		}
+	}
+	if sumF != 3 || sumX != 1 {
+		t.Errorf("全量聚合不符: forwarded=%d failed=%d (%+v)", sumF, sumX, all)
+	}
+
+	// 规则过滤。
+	one, err := repo.Stats(ctx, 1, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one) != 1 || one[0].RuleID != 1 || one[0].Forwarded != 2 || one[0].Failed != 1 {
+		t.Errorf("规则 1 过滤不符: %+v", one)
+	}
+
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM forwarding_stats WHERE rule_id IN (1,2)")
+	})
+}
