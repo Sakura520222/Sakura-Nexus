@@ -6,8 +6,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +18,7 @@ import (
 	"github.com/Sakura520222/Sakura-Nexus/internal/config"
 	"github.com/Sakura520222/Sakura-Nexus/internal/domain"
 	"github.com/Sakura520222/Sakura-Nexus/internal/forwarding"
+	"github.com/Sakura520222/Sakura-Nexus/internal/logging"
 	"github.com/Sakura520222/Sakura-Nexus/internal/platform/ai"
 	"github.com/Sakura520222/Sakura-Nexus/internal/platform/botapi"
 	"github.com/Sakura520222/Sakura-Nexus/internal/platform/mysql"
@@ -25,20 +29,32 @@ import (
 // Production 是装配产物：lifecycle App + T5.3 WebAPI 需要的句柄。
 type Production struct {
 	App *App
+	Log *slog.Logger // 根 logger（LevelVar 可动态调整 + 环形缓冲供 WS 流）
 
 	Engine   *forwarding.Engine
 	Settings *config.SettingsCenter
+	Ring     *logging.Ring // 日志环形缓冲（WS /api/ws 日志流快照+实时）
 
 	// RequestRestart 供 WebUI restart（exit 75 全链，01 §1.4；T5.3 system API 消费）。
 	RequestRestart func()
+	// SetLogLevel 动态调整根 logger 级别（PUT /api/system/log-level）。
+	SetLogLevel func(level string) error
+	// Close 释放装配期资源（环形缓冲订阅流等）。
+	Close func()
 }
 
 // Assemble 按冻结启动序列构造全部组件并注册（不启动；App.Run 统一启动）。
 // MySQL 连接/迁移失败返回错误（CORE，main 以 exit 1 终止）。
-func Assemble(ctx context.Context, env *config.Env, lg *slog.Logger) (*Production, error) {
-	if lg == nil {
-		lg = slog.Default()
-	}
+func Assemble(ctx context.Context, env *config.Env) (*Production, error) {
+	// 1. slog setup（01 §1.1 步骤 1）：文本主输出 + 环形缓冲（WS 日志流），
+	// 级别经 LevelVar 可动态调整。
+	levelVar := new(slog.LevelVar)
+	levelVar.Set(parseLevelEnv(env.LogLevel))
+	ring := logging.NewRing(1024)
+	lg := slog.New(logging.NewFanout(
+		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: levelVar}),
+		ring,
+	))
 
 	// 2. MySQL：连接池 + 启动即迁移（goose，embed SQL）。
 	db, err := mysql.Connect(ctx, mysql.Options{
@@ -138,12 +154,101 @@ func Assemble(ctx context.Context, env *config.Env, lg *slog.Logger) (*Productio
 		aiHolder.Store(aiHolder.build())
 	})
 
+	// WebAPI 业务依赖（04 §2；webapi 侧只见消费方最小接口）。
+	web.ApplyDeps(webapi.Deps{
+		Settings:       settingsAdapter{center},
+		Engine:         engine,
+		RequestRestart: a.RequestRestart,
+		SetLogLevel: func(level string) error {
+			l, err := parseLevelStrict(level)
+			if err != nil {
+				return err
+			}
+			levelVar.Set(l)
+			return nil
+		},
+		Audit: mysql.NewAuditRepo(db),
+	})
+
 	return &Production{
 		App:            a,
+		Log:            lg,
 		Engine:         engine,
 		Settings:       center,
+		Ring:           ring,
 		RequestRestart: a.RequestRestart,
+		SetLogLevel: func(level string) error {
+			l, err := parseLevelStrict(level)
+			if err != nil {
+				return err
+			}
+			levelVar.Set(l)
+			return nil
+		},
+		Close: ring.Close,
 	}, nil
+}
+
+// parseLevelEnv 解析 .env LOG_LEVEL（非法/空回落 info）。
+func parseLevelEnv(s string) slog.Level {
+	l, err := parseLevelStrict(s)
+	if err != nil {
+		return slog.LevelInfo
+	}
+	return l
+}
+
+// parseLevelStrict 严格解析（PUT log-level 校验用）。
+func parseLevelStrict(s string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("非法日志级别: %q（debug|info|warn|error）", s)
+	}
+}
+
+// settingsAdapter 把 *config.SettingsCenter 适配为 webapi.SettingsControl
+// （快照转 JSON 兼容 map；secret 脱敏在 webapi 侧按 scope 执行）。
+type settingsAdapter struct{ c *config.SettingsCenter }
+
+func (a settingsAdapter) Snapshot(scope string) (map[string]any, error) {
+	var v any
+	switch scope {
+	case "system":
+		v = a.c.System()
+	case "forwarding":
+		v = a.c.Forwarding()
+	case "logging":
+		v = a.c.Logging()
+	case "ai":
+		v = a.c.AI()
+	default:
+		return nil, fmt.Errorf("未知 scope: %s", scope)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	m := map[string]any{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (a settingsAdapter) Update(ctx context.Context, scope string, partial map[string]any) error {
+	return a.c.Update(ctx, scope, partial)
+}
+
+func (a settingsAdapter) Scopes() []string {
+	return []string{"system", "forwarding", "logging", "ai"}
 }
 
 // ---------- service 包装与适配（本包内，无基础设施库） ----------

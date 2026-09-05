@@ -31,6 +31,7 @@ type Server struct {
 	sessions *sessionStore
 	limiter  *loginLimiter
 	routes   []route
+	deps     *Deps
 
 	mu     sync.Mutex
 	srv    *http.Server

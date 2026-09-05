@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // Channel 是频道注册表条目（02 §2.2 channels 表的领域形态）。
 type Channel struct {
 	TgID             int64  `json:"tgId"`               // 裸 ID（唯一稳定标识）
@@ -48,4 +50,13 @@ type AuditEntry struct {
 	Actor  string         `json:"actor"` // webui:<username> / tg:<user_id> / system
 	Action string         `json:"action"`
 	Detail map[string]any `json:"detail,omitempty"`
+}
+
+// AuditLogEntry 是审计查询行（04 §2 GET /api/system/audit-logs；写侧用 AuditEntry）。
+type AuditLogEntry struct {
+	ID        int64          `db:"id" json:"id"`
+	Actor     string         `db:"actor" json:"actor"`
+	Action    string         `db:"action" json:"action"`
+	Detail    map[string]any `db:"detail" json:"detail,omitempty"`
+	CreatedAt time.Time      `db:"created_at" json:"createdAt"`
 }

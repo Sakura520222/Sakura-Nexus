@@ -391,6 +391,35 @@ func (r *AuditRepo) Append(ctx context.Context, e domain.AuditEntry) error {
 	return nil
 }
 
+// List 返回最近 limit 条审计（新→旧；04 §2 GET /api/system/audit-logs）。
+// detail JSON 列经 RawMessage 中转（NULL → nil → 省略）。
+func (r *AuditRepo) List(ctx context.Context, limit int) ([]domain.AuditLogEntry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var rows []struct {
+		ID        int64           `db:"id"`
+		Actor     string          `db:"actor"`
+		Action    string          `db:"action"`
+		Detail    json.RawMessage `db:"detail"`
+		CreatedAt time.Time       `db:"created_at"`
+	}
+	if err := r.db.SelectContext(ctx, &rows, `
+		SELECT id, actor, action, detail, created_at
+		FROM system_audit_logs ORDER BY id DESC LIMIT ?`, limit); err != nil {
+		return nil, fmt.Errorf("list audit logs: %w", err)
+	}
+	out := make([]domain.AuditLogEntry, 0, len(rows))
+	for _, row := range rows {
+		e := domain.AuditLogEntry{ID: row.ID, Actor: row.Actor, Action: row.Action, CreatedAt: row.CreatedAt}
+		if len(row.Detail) > 0 {
+			_ = json.Unmarshal(row.Detail, &e.Detail)
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
 // ---------- helpers ----------
 
 func nullStr(s string) any {
