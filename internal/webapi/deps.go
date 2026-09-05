@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Sakura520222/Sakura-Nexus/internal/domain"
+	"github.com/Sakura520222/Sakura-Nexus/internal/forwarding"
 )
 
 // Deps 是业务 API 的依赖注入面（04 §2 API 清单；webapi 只依赖消费方最小
@@ -23,6 +24,17 @@ type Deps struct {
 	SetLogLevel func(level string) error
 	// Audit：审计查询（GET /system/audit-logs；写侧经 WithAuditSink）。
 	Audit AuditReader
+	// Rules：转发规则管理（04 §2 forwarding CRUD+enable/disable）。
+	Rules RuleAdmin
+	// Channels：频道管理（04 §2 channels CRUD；channel_settings 属 P1/P2）。
+	Channels ChannelAdmin
+	// Stats：转发统计读取（GET /forwarding/stats）。
+	Stats StatsReader
+}
+
+// StatsReader 是统计读取最小面（mysql.ForwardedRepo 结构满足）。
+type StatsReader interface {
+	Stats(ctx context.Context, ruleID int64, days int) ([]domain.ForwardingStat, error)
 }
 
 // SettingsControl 是 settings 中心的 API 侧最小面（app 层适配
@@ -41,6 +53,10 @@ type EngineControl interface {
 	Paused() bool
 	Pause()
 	Resume()
+	// Backfill 回溯补发（03 §3.7；POST /forwarding/rules/{id}/backfill）。
+	Backfill(ctx context.Context, ruleID int64, limit int) (forwarding.BackfillResult, error)
+	// RefreshRules 规则 CRUD 后热装载（03 §3.1）。
+	RefreshRules(ctx context.Context) error
 }
 
 // AuditReader 是审计查询最小面。
@@ -76,6 +92,7 @@ func (s *Server) registerSystemRoutes() {
 	s.Handle("GET", "/api/system/audit-logs", s.handleAuditLogs)
 	s.Handle("GET", "/api/settings/{scope}", s.handleSettingsGet)
 	s.Handle("PUT", "/api/settings/{scope}", s.handleSettingsPut)
+	s.registerForwardingChannelsRoutes()
 }
 
 // handleSystemStatus 组件细项与运行状态（01 §1.5：鉴权后）。

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Sakura520222/Sakura-Nexus/internal/domain"
+	"github.com/Sakura520222/Sakura-Nexus/internal/forwarding"
 )
 
 // ---------- fakes ----------
@@ -44,14 +45,25 @@ func (f *fakeSettings) Update(_ context.Context, scope string, partial map[strin
 func (f *fakeSettings) Scopes() []string { return f.scopes }
 
 type fakeEngine struct {
-	paused  bool
-	pauses  int
-	resumes int
+	paused      bool
+	pauses      int
+	resumes     int
+	backfills   [][2]int64 // {ruleID, limit}
+	refreshes   int
+	backfillRes forwarding.BackfillResult
+	backfillErr error
 }
 
 func (f *fakeEngine) Paused() bool { return f.paused }
 func (f *fakeEngine) Pause()       { f.pauses++; f.paused = true }
 func (f *fakeEngine) Resume()      { f.resumes++; f.paused = false }
+
+func (f *fakeEngine) Backfill(_ context.Context, ruleID int64, limit int) (forwarding.BackfillResult, error) {
+	f.backfills = append(f.backfills, [2]int64{ruleID, int64(limit)})
+	return f.backfillRes, f.backfillErr
+}
+
+func (f *fakeEngine) RefreshRules(context.Context) error { f.refreshes++; return nil }
 
 type fakeAuditReader struct {
 	entries []domain.AuditLogEntry

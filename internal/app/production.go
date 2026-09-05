@@ -158,6 +158,9 @@ func Assemble(ctx context.Context, env *config.Env) (*Production, error) {
 	web.ApplyDeps(webapi.Deps{
 		Settings:       settingsAdapter{center},
 		Engine:         engine,
+		Rules:          ruleRepo,
+		Channels:       channelRepo,
+		Stats:          dedupRepo,
 		RequestRestart: a.RequestRestart,
 		SetLogLevel: func(level string) error {
 			l, err := parseLevelStrict(level)
