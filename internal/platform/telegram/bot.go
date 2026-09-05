@@ -33,6 +33,10 @@ func (b *BotClient) Run(ctx context.Context, f func(ctx context.Context) error) 
 	return b.client.Run(ctx, f)
 }
 
+// Raw 暴露底层客户端——仅供 Outbound 等出站侧接线使用（引擎注入 PeerResolver
+// 与 NewOutbound）；领域代码不得触碰（01 §2.2）。
+func (b *BotClient) Raw() *telegram.Client { return b.client }
+
 // AuthBot 以 Bot token 登录（已授权时幂等返回）。
 func (b *BotClient) AuthBot(ctx context.Context, token string) error {
 	_, err := b.client.Auth().Bot(ctx, token)
