@@ -344,11 +344,19 @@ func RegisteredInputMedia(m tg.MessageMediaClass) (tg.InputMediaClass, error) {
 	switch v := m.(type) {
 	case *tg.MessageMediaPhoto:
 		if ph, ok := v.Photo.(*tg.Photo); ok {
-			return &tg.InputMediaPhoto{ID: &tg.InputPhoto{ID: ph.ID, AccessHash: ph.AccessHash}}, nil
+			return &tg.InputMediaPhoto{ID: &tg.InputPhoto{
+				ID:            ph.ID,
+				AccessHash:    ph.AccessHash,
+				FileReference: ph.FileReference, // 缺失即 400 FILE_REFERENCE_EMPTY（GATE-2 冒烟实证）
+			}}, nil
 		}
 	case *tg.MessageMediaDocument:
 		if d, ok := v.Document.(*tg.Document); ok {
-			return &tg.InputMediaDocument{ID: &tg.InputDocument{ID: d.ID, AccessHash: d.AccessHash}}, nil
+			return &tg.InputMediaDocument{ID: &tg.InputDocument{
+				ID:            d.ID,
+				AccessHash:    d.AccessHash,
+				FileReference: d.FileReference,
+			}}, nil
 		}
 	}
 	return nil, fmt.Errorf("uploadMedia 返回不可注册媒体: %T", m)
