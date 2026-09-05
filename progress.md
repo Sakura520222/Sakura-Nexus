@@ -337,3 +337,16 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
   4. NewOutbound 原打 slog.Default() 致冒烟观测面失灵 → WithLog option。
 - **门禁**：gofmt 空 / lint 0 / `-race` 全量绿；CI 78a1156/0ca1b23 待终态。
 - **Phase 4（Rich 出站，ADR-008）完结**：T4.1 传输层 + T4.2 renderer + T4.3 路由 + Rich smoke checkpoint。**下一任务 Phase 5 T5.1 接线收口**（WebServer/service 注册、readiness barrier、exit 75 全链；HANDOFF §3 接线备忘含 FailureClassifier 完整映射/Rewriter/AssistantBot/settings 订阅/规则 CRUD→RefreshRules/Bot 侧 peer 查询表）。
+
+## 2026-09-05 · 会话 5：T5.1 接线收口完成——生产组合根全链实跑（bfe58c1 + 1ebd408 + d087ab8 + 01c5b5b）
+
+- **platform/telegram**：PeerBook（Bot 侧 PeerResolver：telegram_peers bot 行解析，channel 未命中 getChannels 回源回写）；IsPermanentSendError（15 项「重试无益」tgerr 码全集，FLOOD_WAIT/网络/5xx=transient）；UserService（LENIENT：未登录 degraded 30s 重查等待，授权后 manager.Run）+ BotService（STRICT：失败 CORE fatal exit 1；Readiness=授权成功）+ UsernameHolder（onAuthed 用 string 签名——组合根不触碰 gotd 类型）。
+- **webapi.Server 壳**：结构满足 app.Service/Readiness（不 import app）；ctx 取消联动优雅停机；GET /api/health 最小形状（组件聚合 T5.2 完善）。
+- **app.Assemble**（01 §1.1 序列 2–8）：MySQL→settings→platform→service 构造→注册（user=Degradable / bot=Core / forwarding=Degradable / webserver=Core，关闭逆序）→settings 热更订阅（forwarding→ApplySettings、ai→换 Provider 实例）。sinkHolder 延迟填充解 user↔engine 构造环；messageSink=canonical writer+engine.HandleNew。aiRewriter/forwardingParamsOf/classifySendFailure 适配器（单测覆盖）。
+- **engine 扩展**：AssistantBotFn（bot username 运行时来源）；mysql.ChannelRepo.GetByTgID→Get（消费者命名）。
+- **main runApp**：exit 0/1/2/75 全链；LOG_LEVEL 解析。
+- **S 实跑两轮**（真实凭据）：
+  - 首轮抓到**生产装配漏 Sink** → Recovery.backfill 空指针 panic（跨 goroutine，supervisor 边界 recover 不可达——01 §1.3 边界语义的真实边界）→ 修复（canonical writer+engine 入口接线）。另抓到 /tmp 同名文件自撞默认媒体临时目录（我编译二进制的命名事故，非代码缺陷；supervisor 退避循环按设计工作）。
+  - 终轮 PASS：bot/user 连接 ✓、updates 补抓 canonical 落库（2 频道×50）✓、不可访问频道（4 个冒烟残留）停止恢复 R3.1.1 ✓、health 200 ✓、SIGTERM 优雅退出 code=0 ✓、engine 零 OwnFatal ✓。exit 75 机制 U 级已验（T2.0），全链 UI 触发点待 T5.3。
+- **CI 红 1 次**（01c5b5b 修复）：integration tag 文件不在 `go test -race ./...` 覆盖内，ChannelRepo 改名漏改集成测试。**教训**：改 mysql 导出方法必须同步 `go test -race -tags integration ./...` 本地跑过再推。
+- 下一任务：T5.2 webapi 骨架（路由、auth opaque session/Cookie/失败锁定/RemoteAddr、audit 中间件；httptest）。

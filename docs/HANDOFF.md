@@ -19,13 +19,13 @@
 | Phase 2 生命周期+存储/配置 | ✅ T2.0–T2.4 全部 CI 绿 |
 | Phase 3 转发引擎 | ✅ T3.1–T3.9 + **GATE-2 PASS**（smoke-forward 三 case 端到端 + 相册全成员 dedup 查库，2026-09-05）；S 冒烟实证修复 6 个真实缺陷（random_id/tmpRoot/扩展名/相册 uploadMedia 注册/file_reference——详见 progress.md 会话 3） |
 | Phase 4 Rich 出站 | ✅ **完结**：T4.1（botapi 传输层 72bcc19）+ T4.2（renderer 517c22b）+ T4.3（路由/fallback/capability 78a1156）+ **Rich smoke checkpoint PASS**（0ca1b23，真实 sendRichMessage 可用性实证） |
-| Phase 5 服务接线 + WebUI | **下一任务**：T5.1 接线收口 → T5.2 webapi 骨架 → T5.3 业务 API → T5.4 前端 → GATE-3 |
+| Phase 5 服务接线 + WebUI | 🔄 T5.1 ✅（组合根 Assemble 全 service 注册 + readiness + exit 75 链 + S 实跑全过，bfe58c1/1ebd408/d087ab8/01c5b5b）；**下一任务 T5.2** webapi 骨架（auth/audit）→ T5.3 业务 API → T5.4 前端 → GATE-3 |
 | Phase 5 | 服务接线 + WebUI（T5.1–T5.4）→ GATE-3 |
 | Phase 6 | 部署与验收（T6.1–T6.4）→ GATE-4 = P0 Done |
 
 ## 3. 下一步
 
-1. **T5.1 接线收口**（Phase 5 首任务；依赖 GATE-2 ✅ + T4.3 ✅）：WebServer 及全部 service 正式注册、readiness barrier 完整化、WebUI restart→exit 75 全链验证（U+S）。接线备忘（HANDOFF §3.2）+ Rich 装配：`NewOutbound(bot.Raw(), botPeers, botapi.NewClient(token), telegram.WithLog(lg))`；`RichCapability()` 接 WebUI 系统页（03 §2.9）。
+1. **T5.2 webapi 骨架**（依赖 T5.1 ✅）：标准库路由、/api/health 完整形状（01 §1.5：status 聚合 ok|degraded|down + 组件细项在鉴权后 /api/system/status）、auth（opaque session、Cookie、失败锁定、RemoteAddr）、audit 中间件（04 §auth 设计；httptest 验证）。装配句柄已备好：app.Production{App/Engine/Settings/RequestRestart}；webapi.NewServer(host, port, lg) 壳内加路由与依赖注入。
 2. 引擎接线（T5.1）备忘（代码注释 + 会话记录）：FailureClassifier 完整 tgerr→permanent 映射（冒烟侧已有最小版）、Rewriter（ai.Provider 适配 rule.AIPrompt）、AssistantBot（Bot username）、settings 订阅→ApplySettings、规则 CRUD→RefreshRules、**Bot 侧 peer 查询表**（冒烟用静态表 + getChannels 验证可行）、相册已生产化走 uploadMedia 注册路径（551ac00）。
 3. 已知运行事实（GATE-2 实证，写代码时参考）：Bot 账号发送必须带非零 random_id；photo 再上传文件名必须带照片扩展；sendMultiMedia 成员须先 messages.uploadMedia 注册且引用带 file_reference；小尺寸纯色图相册必拒（MEDIA_INVALID）。
 
