@@ -359,3 +359,12 @@ ADR-001~008 与 01/02 主体保持冻结；R3.1 只做技术闭环修正：
 - ServerOptions 模式 + Handle() 路由注册面 = T5.3 业务 API 的挂载点（须 Run 前注册）。
 - 门禁全绿含本地集成；CI 绿。
 - 下一任务：T5.3 业务 API（settings/forwarding CRUD/backfill/channels/userbot 向导三步复用 UserAuthService/system pause-resume-restart(75)/log-level/audit-logs + WS 日志流；httptest + I）。
+
+## 2026-09-05 · 会话 5（终）：T5.3 业务 API 完成——四子提交 CI 全绿（15d5af3 + eb73ef3 + 8468472 + 954a5eb）
+
+- **地基**（15d5af3）：logging.Ring 环形缓冲（component 属性提升 + Subscribe 非阻塞广播 + Snapshot；WithAttrs 直返自身会丢 With 链——单测抓到，ringChild 修复）+ Named 工厂；engine.Pause/Resume/Paused（HandleNew 即返回，canonical 已存 + cursor 不推进，恢复经 Backfill 补发，§6 语义天然覆盖）；domain.ForwardingStat（db+json 双 tag，sqlx 映射需要）+ ForwardedRepo.Stats。
+- **system + settings**（eb73ef3）：webapi.Deps 消费方最小接口注入面（SettingsControl/EngineControl/AuditReader + RequestRestart/SetLogLevel）；system status/pause/resume/restart（先应答后异步 exit 75）/log-level（LevelVar 动态 422 校验）/audit-logs；settings GET（secret 脱敏 •••+尾4）PUT（Update 字段级合并，422）；Assemble 内建日志装配（LevelVar+Ring+Fanout）→ Production{Log/Ring/SetLogLevel/Close}，main 瘦身。live 抓到 AuditRepo.List 的 JSON NULL→map 扫描失败（RawMessage 中转修复）。
+- **forwarding + channels**（8468472）：规则 CRUD/enable/disable/backfill（≤200）/stats + channels CRUD；DTO 层字符串 ID 约定（domain JSON 数值形态为冻结决策，转换集中 API 层）；lastMessageId cursor 只读（PUT 忽略入参保留存储值）；CRUD 后 RefreshRules 热装载；channel_settings 为 P1/P2 按范围锁定不暴露。
+- **userbot 向导 + WS**（954a5eb）：WizardService（独立连接向导会话，并发 3 + 10min 超时；runLogin 注入化编舞单测）+ UserClient.Logout/JoinChannel；WS 日志流全协议（同源 Cookie+Origin 校验、快照回放+实时推送、subscribe 服务端过滤、ping/pong+30s 心跳；coder/websocket=ADR-005 冻结选型）。**关键修复：Handle 的 statusRecorder 不实现 http.Hijacker → WS 升级 501**（审计包装仅写方法应用）；live 验证 status 全字段 + WS 快照回放实测。
+- **S live 全链**（每子提交真实凭据实跑）：登录→system/status→settings 脱敏→pause→audit-logs→log-level→规则 CRUD→stats（真实转发计数）→userbot/status→WS 日志流，全部 200/形态符合 04 冻结协议；优雅退出 code=0。
+- **T5.3 完成**（U=httptest 全行为 + I=集成 + S=live 实跑）。**下一任务 T5.4 前端**（Vite+Vue3+TS+Naive UI 脚手架 → 七页面 → pnpm build → go:embed → CI 前端 job）→ GATE-3 浏览器全流程。
